@@ -685,16 +685,16 @@ export const GuardianView: React.FC = () => {
                           // Strip brand parentheses or info parentheses
                           cleaned = cleaned.replace(/\s*\([^)]*\)/g, "");
 
-                          // Strip trailing dosages
+                          // Strip trailing dosages like 500mg, 20mg
                           cleaned = cleaned.replace(/\s+\d+\s*(mg|ml|g|tab|caps?|mcg)\b.*/i, "");
 
-                          // Strip dosage patterns like 1+0+1, 1-0-1, etc.
+                          // Strip trailing frequency/instructions (runs first)
+                          cleaned = cleaned.replace(/\s+(once|twice|after|before|morning|evening|daily|tab|tablet|qd|bid|tid|qhs|mg|ml)\b.*/i, "");
+
+                          // Strip dosage patterns like 1+0+1, 1-0-1, 6+0+6, etc. (runs after frequency)
                           cleaned = cleaned.replace(/\s+\d+[\+\-x\d\s]*(daily|caps?|tabs?|ml)?$/i, "");
 
-                          // Strip trailing frequency/instructions
-                          cleaned = cleaned.replace(/\s+(once|twice|after|before|morning|evening|daily|tab|tablet|qd|bid|tid|qhs|mg|ml).*$/i, "");
-
-                          // Finally clean up any trailing non-alphanumeric chars (like trailing dashes, spaces)
+                          // Finally clean up any trailing non-alphanumeric chars
                           cleaned = cleaned.replace(/[^a-zA-Z0-9]+$/, "").trim();
 
                           return cleaned || s.trim().split(" ")[0];
