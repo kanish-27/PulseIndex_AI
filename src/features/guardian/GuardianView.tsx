@@ -36,6 +36,32 @@ interface PrescriptionScenario {
   targetReplacementDrug?: string;
 }
 
+// Helper to extract clean medicine name only — strip dose patterns, frequencies, and brand parentheses
+const getMedName = (s: string) => {
+  let cleaned = s.trim()
+    .replace(/^(cap|t|tab|syr|inj|capsule|tablet|caps?|tabs?)\.?\s+/i, ""); // strip Cap. Tab. etc.
+  
+  // Split at consecutive dashes/dots/underscores
+  cleaned = cleaned.split(/[-._]{2,}/)[0].trim();
+
+  // Strip brand parentheses or info parentheses
+  cleaned = cleaned.replace(/\s*\([^)]*\)/g, "");
+
+  // Strip trailing dosages like 500mg, 20mg
+  cleaned = cleaned.replace(/\s+\d+\s*(mg|ml|g|tab|caps?|mcg)\b.*/i, "");
+
+  // Strip trailing frequency/instructions (runs first)
+  cleaned = cleaned.replace(/\s+(once|twice|after|before|morning|evening|daily|tab|tablet|qd|bid|tid|qhs|mg|ml|got)\b.*/i, "");
+
+  // Strip dosage patterns like 1+0+1, 1-0-1, 6+0+6, etc. (runs after frequency)
+  cleaned = cleaned.replace(/\s+\d+[\+\-x\d\s]*(daily|caps?|tabs?|ml)?$/i, "");
+
+  // Finally clean up any trailing non-alphanumeric chars
+  cleaned = cleaned.replace(/[^a-zA-Z0-9]+$/, "").trim();
+
+  return cleaned || s.trim().split(" ")[0];
+};
+
 export const GuardianView: React.FC = () => {
   const { 
     recordGuardianCheck,
@@ -644,7 +670,9 @@ export const GuardianView: React.FC = () => {
                   <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl space-y-1">
                     <span className="text-[9px] font-bold text-primary-700 uppercase font-sans">Active Medications</span>
                     <p className="font-bold text-primary-950 whitespace-pre-line leading-relaxed">
-                      {medications ? medications.split(',').map(m => `• ${m.trim()}`).join('\n') : 'No active medications'}
+                      {medications 
+                        ? medications.split(/[,\n;]\s*/).filter(Boolean).map(m => `• ${getMedName(m)}`).join('\n') 
+                        : 'No active medications'}
                     </p>
                   </div>
 
@@ -674,31 +702,6 @@ export const GuardianView: React.FC = () => {
                 <div className="grid grid-cols-1 gap-2">
                   {currentPatientProfile?.prescriptions && currentPatientProfile.prescriptions !== 'None'
                     ? currentPatientProfile.prescriptions.split(/[,\n;]\s*/).filter(Boolean).map((med, idx) => {
-                        // Extract medicine name only — strip dose patterns, frequencies, and brand parentheses
-                        const getMedName = (s: string) => {
-                          let cleaned = s.trim()
-                            .replace(/^(cap|t|tab|syr|inj|capsule|tablet|caps?|tabs?)\.?\s+/i, ""); // strip Cap. Tab. etc.
-                          
-                          // Split at consecutive dashes/dots/underscores
-                          cleaned = cleaned.split(/[-._]{2,}/)[0].trim();
-
-                          // Strip brand parentheses or info parentheses
-                          cleaned = cleaned.replace(/\s*\([^)]*\)/g, "");
-
-                          // Strip trailing dosages like 500mg, 20mg
-                          cleaned = cleaned.replace(/\s+\d+\s*(mg|ml|g|tab|caps?|mcg)\b.*/i, "");
-
-                          // Strip trailing frequency/instructions (runs first)
-                          cleaned = cleaned.replace(/\s+(once|twice|after|before|morning|evening|daily|tab|tablet|qd|bid|tid|qhs|mg|ml)\b.*/i, "");
-
-                          // Strip dosage patterns like 1+0+1, 1-0-1, 6+0+6, etc. (runs after frequency)
-                          cleaned = cleaned.replace(/\s+\d+[\+\-x\d\s]*(daily|caps?|tabs?|ml)?$/i, "");
-
-                          // Finally clean up any trailing non-alphanumeric chars
-                          cleaned = cleaned.replace(/[^a-zA-Z0-9]+$/, "").trim();
-
-                          return cleaned || s.trim().split(" ")[0];
-                        };
                         const displayName = getMedName(med);
                         const drugName = displayName; // use clean name for API lookup too
                         const isSelected = selectedScenario === `med_${idx}`;

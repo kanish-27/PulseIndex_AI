@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "node server.js",
-    "consent-server": "python3 -m uvicorn backend.app:app --port 8000"
+    "consent-server": "python3 -u -m uvicorn backend.app:app --port 8000 --env-file .env"
   },
   "dependencies": {
     "react": "^19.2.6",

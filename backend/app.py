@@ -26,22 +26,67 @@ app.add_middleware(
 )
 
 # Database Setup with robust fallbacks
-DATABASE_URL = "postgresql://mathiyazhini@localhost/mediguard_consent"
+DATABASE_URL_ENV = os.getenv("DATABASE_URL")
+DATABASE_URL_DEV = "postgresql://mathiyazhini@localhost/mediguard_consent"
 DATABASE_URL_POSTGRES = "postgresql://postgres@localhost/mediguard_consent"
 DATABASE_URL_SQLITE = "sqlite:///./mediguard_consent.db"
 
 engine = None
-for url in [DATABASE_URL, DATABASE_URL_POSTGRES, DATABASE_URL_SQLITE]:
+urls_to_try = []
+if DATABASE_URL_ENV:
+    urls_to_try.append(DATABASE_URL_ENV)
+    
+    # Auto-generate IPv4 pooler alternatives for Supabase IPv6 connections
+    if "db." in DATABASE_URL_ENV and ".supabase.co" in DATABASE_URL_ENV:
+        try:
+            parts = DATABASE_URL_ENV.split("@")
+            cred_part = parts[0]
+            host_part = parts[1]
+            project_id = host_part.split(".supabase.co")[0].replace("db.", "")
+            db_name = host_part.split("/")[-1]
+            cred_parts = cred_part.split("://")
+            scheme = cred_parts[0]
+            user_pass = cred_parts[1].split(":")
+            password = user_pass[1] if len(user_pass) > 1 else ""
+            
+            pooler_username = f"postgres.{project_id}"
+            regions = ["ap-south-1", "ap-southeast-1", "us-east-1", "eu-central-1", "us-west-1", "eu-west-1"]
+            for r in regions:
+                pooler_host = f"aws-0-{r}.pooler.supabase.com"
+                urls_to_try.append(f"{scheme}://{pooler_username}:{password}@{pooler_host}:6543/{db_name}")
+                urls_to_try.append(f"{scheme}://{pooler_username}:{password}@{pooler_host}:5432/{db_name}")
+        except Exception as parse_err:
+            print(f"Failed to auto-generate pooler URLs: {parse_err}")
+
+urls_to_try.extend([DATABASE_URL_DEV, DATABASE_URL_POSTGRES, DATABASE_URL_SQLITE])
+
+for url in urls_to_try:
     try:
         # Use short timeout for postgres, so if it's down it fails quickly
-        connect_args = {"connect_timeout": 3} if "postgresql" in url else {}
+        connect_args = {"connect_timeout": 5} if "postgresql" in url else {}
         test_engine = create_engine(url, connect_args=connect_args)
         with test_engine.connect() as conn:
             engine = test_engine
-            print(f"Successfully connected to database: {url}")
+            # Hide password in logs if database url contains one
+            safe_url = url
+            try:
+                if "@" in url:
+                    parts = url.split("@")
+                    credentials = parts[0].split("://")
+                    scheme = credentials[0]
+                    user_pass = credentials[1].split(":")
+                    user = user_pass[0]
+                    safe_url = f"{scheme}://{user}:****@{parts[1]}"
+            except Exception:
+                safe_url = "postgresql://postgres:****@db.xjaymfyjmxynidgglkwv.supabase.co:5432/postgres" # fallback mask
+            print(f"Successfully connected to database: {safe_url}")
             break
     except Exception as e:
-        print(f"Connection failed for {url}: {e}")
+        # Mask password in error message if printed
+        err_msg = str(e)
+        if DATABASE_URL_ENV and DATABASE_URL_ENV in err_msg:
+            err_msg = err_msg.replace(DATABASE_URL_ENV, "DATABASE_URL")
+        print(f"Connection failed for database url: {err_msg}")
 
 if engine is None:
     print("Falling back to local SQLite database.")
