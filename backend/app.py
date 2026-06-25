@@ -25,40 +25,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Setup with robust fallbacks
+# Database Setup
 DATABASE_URL_ENV = os.getenv("DATABASE_URL")
-DATABASE_URL_DEV = "postgresql://mathiyazhini@localhost/mediguard_consent"
-DATABASE_URL_POSTGRES = "postgresql://postgres@localhost/mediguard_consent"
-DATABASE_URL_SQLITE = "sqlite:///./mediguard_consent.db"
+if not DATABASE_URL_ENV:
+    raise RuntimeError("DATABASE_URL is not set in the environment or .env file. The application is configured to strictly require Supabase and cannot start.")
 
 engine = None
-urls_to_try = []
-if DATABASE_URL_ENV:
-    urls_to_try.append(DATABASE_URL_ENV)
-    
-    # Auto-generate IPv4 pooler alternatives for Supabase IPv6 connections
-    if "db." in DATABASE_URL_ENV and ".supabase.co" in DATABASE_URL_ENV:
-        try:
-            parts = DATABASE_URL_ENV.split("@")
-            cred_part = parts[0]
-            host_part = parts[1]
-            project_id = host_part.split(".supabase.co")[0].replace("db.", "")
-            db_name = host_part.split("/")[-1]
-            cred_parts = cred_part.split("://")
-            scheme = cred_parts[0]
-            user_pass = cred_parts[1].split(":")
-            password = user_pass[1] if len(user_pass) > 1 else ""
-            
-            pooler_username = f"postgres.{project_id}"
-            regions = ["ap-south-1", "ap-southeast-1", "us-east-1", "eu-central-1", "us-west-1", "eu-west-1"]
-            for r in regions:
-                pooler_host = f"aws-0-{r}.pooler.supabase.com"
-                urls_to_try.append(f"{scheme}://{pooler_username}:{password}@{pooler_host}:6543/{db_name}")
-                urls_to_try.append(f"{scheme}://{pooler_username}:{password}@{pooler_host}:5432/{db_name}")
-        except Exception as parse_err:
-            print(f"Failed to auto-generate pooler URLs: {parse_err}")
+urls_to_try = [DATABASE_URL_ENV]
 
-urls_to_try.extend([DATABASE_URL_DEV, DATABASE_URL_POSTGRES, DATABASE_URL_SQLITE])
+# Auto-generate IPv4 pooler alternatives for Supabase IPv6 connections
+if "db." in DATABASE_URL_ENV and ".supabase.co" in DATABASE_URL_ENV:
+    try:
+        parts = DATABASE_URL_ENV.split("@")
+        cred_part = parts[0]
+        host_part = parts[1]
+        project_id = host_part.split(".supabase.co")[0].replace("db.", "")
+        db_name = host_part.split("/")[-1]
+        cred_parts = cred_part.split("://")
+        scheme = cred_parts[0]
+        user_pass = cred_parts[1].split(":")
+        password = user_pass[1] if len(user_pass) > 1 else ""
+        
+        pooler_username = f"postgres.{project_id}"
+        regions = ["ap-south-1", "ap-southeast-1", "us-east-1", "eu-central-1", "us-west-1", "eu-west-1"]
+        for r in regions:
+            pooler_host = f"aws-0-{r}.pooler.supabase.com"
+            urls_to_try.append(f"{scheme}://{pooler_username}:{password}@{pooler_host}:6543/{db_name}")
+            urls_to_try.append(f"{scheme}://{pooler_username}:{password}@{pooler_host}:5432/{db_name}")
+    except Exception as parse_err:
+        print(f"Failed to auto-generate pooler URLs: {parse_err}")
 
 for url in urls_to_try:
     try:
@@ -89,8 +84,10 @@ for url in urls_to_try:
         print(f"Connection failed for database url: {err_msg}")
 
 if engine is None:
-    print("Falling back to local SQLite database.")
-    engine = create_engine(DATABASE_URL_SQLITE, connect_args={"check_same_thread": False})
+    raise RuntimeError(
+        "DATABASE CONNECTION FAILED: A connection to Supabase database could not be established. "
+        "The application is configured to strictly require Supabase and will not run without a valid database connection."
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
