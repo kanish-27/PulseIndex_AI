@@ -407,12 +407,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           overallIndex: 95
         }
       };
+      const newProfile = {
+        ...existing,
+        ...updatedFields
+      };
+
+      // Save to Firestore asynchronously
+      setDoc(doc(db, 'patient_profiles', name), newProfile)
+        .catch(err => console.error('Error saving patient profile to Firestore:', err));
+
       return {
         ...prev,
-        [name]: {
-          ...existing,
-          ...updatedFields
-        }
+        [name]: newProfile
       };
     });
   };
@@ -422,10 +428,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     if (newUser.role === 'patient') {
       const newProfile = synthesizePatientProfile(newUser.name);
-      setPatientProfiles(prev => ({
-        ...prev,
-        [newUser.name]: newProfile
-      }));
+      setPatientProfiles(prev => {
+        const newProfiles = {
+          ...prev,
+          [newUser.name]: newProfile
+        };
+        // Save to Firestore
+        setDoc(doc(db, 'patient_profiles', newUser.name), newProfile)
+          .catch(err => console.error('Error saving patient profile in registerUser:', err));
+        return newProfiles;
+      });
     }
   };
   const [uploadingFile, setUploadingFile] = useState<{ name: string; step: 'hashing' | 'encrypting' | 'classifying' | 'ledgering' | 'done' | null }>({ name: '', step: null });
@@ -584,6 +596,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     fetchSignatures();
     fetchConsentAuditLogs();
+    fetchHealthRecords();
+    fetchBlockchainAuditLogs();
+    fetchPatientProfiles();
   }, []);
 
   const fetchSignatures = async () => {
@@ -618,6 +633,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setConsentAuditLogs(data);
     } catch (err) {
       console.error('Error fetching consent audit logs:', err);
+    }
+  };
+
+  const fetchHealthRecords = async () => {
+    try {
+      const q = query(collection(db, 'health_records'), orderBy('date', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const data: HealthRecord[] = [];
+      querySnapshot.forEach((docSnap) => {
+        data.push({ id: docSnap.id, ...docSnap.data() } as HealthRecord);
+      });
+      setRecords(data);
+    } catch (err) {
+      console.error('Error fetching health records:', err);
+    }
+  };
+
+  const fetchBlockchainAuditLogs = async () => {
+    try {
+      const q = query(collection(db, 'blockchain_audit_logs'), orderBy('blockIndex', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const data: AuditLog[] = [];
+      querySnapshot.forEach((docSnap) => {
+        data.push({ id: docSnap.id, ...docSnap.data() } as AuditLog);
+      });
+      if (data.length > 0) {
+        setAuditLogs(data);
+      }
+    } catch (err) {
+      console.error('Error fetching blockchain audit logs:', err);
+    }
+  };
+
+  const fetchPatientProfiles = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'patient_profiles'));
+      const data: Record<string, PatientProfile> = {};
+      querySnapshot.forEach((docSnap) => {
+        data[docSnap.id] = docSnap.data() as PatientProfile;
+      });
+      if (Object.keys(data).length > 0) {
+        setPatientProfiles(prev => ({
+          ...prev,
+          ...data
+        }));
+      }
+    } catch (err) {
+      console.error('Error fetching patient profiles:', err);
     }
   };
 
@@ -1158,6 +1221,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 clinicalFindings: clinicalFindings
               };
 
+              // Store health record in Firestore asynchronously
+              setDoc(doc(db, 'health_records', recordId), newRecord)
+                .catch(err => console.error('Error saving health record to Firestore:', err));
+
               setRecords(prev => [newRecord, ...prev]);
 
               // AUTO-SYNC: If uploaded file has structured medication data, REPLACE patient's active medications
@@ -1181,12 +1248,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     setPatientProfiles(prev => {
                       const existing = prev[patientName];
                       if (!existing) return prev;
+                      const newProfile = {
+                        ...existing,
+                        prescriptions: newMeds
+                      };
+                      
+                      // Save updated profile to Firestore
+                      setDoc(doc(db, 'patient_profiles', patientName), newProfile)
+                        .catch(err => console.error('Error saving synced patient profile to Firestore:', err));
+
                       return {
                         ...prev,
-                        [patientName]: {
-                          ...existing,
-                          prescriptions: newMeds
-                        }
+                        [patientName]: newProfile
                       };
                     });
                   }
@@ -1212,6 +1285,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
                 status: 'SUCCESS'
               };
+
+              // Store log in Firestore asynchronously
+              setDoc(doc(db, 'blockchain_audit_logs', newLog.id), newLog)
+                .catch(err => console.error('Error saving blockchain audit log to Firestore:', err));
 
               setAuditLogs(prev => [newLog, ...prev]);
               setUploadingFile({ name: '', step: null });
@@ -1251,6 +1328,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'OVERRIDE'
     };
 
+    // Store in Firestore asynchronously
+    setDoc(doc(db, 'blockchain_audit_logs', newLog.id), newLog)
+      .catch(err => console.error('Error saving break-glass log to Firestore:', err));
+
     setAuditLogs(prev => [newLog, ...prev]);
   };
 
@@ -1276,6 +1357,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
       status: 'SUCCESS'
     };
+
+    // Store in Firestore asynchronously
+    setDoc(doc(db, 'blockchain_audit_logs', newLog.id), newLog)
+      .catch(err => console.error('Error saving deactivate break-glass log to Firestore:', err));
 
     setAuditLogs(prev => [newLog, ...prev]);
   };
