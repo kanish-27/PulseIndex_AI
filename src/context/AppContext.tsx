@@ -1221,8 +1221,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 clinicalFindings: clinicalFindings
               };
 
+              // Sanitize undefined fields for Firestore (e.g. clinicalFindings)
+              const docData = { ...newRecord };
+              if (docData.clinicalFindings === undefined) {
+                delete docData.clinicalFindings;
+              }
+
               // Store health record in Firestore asynchronously
-              setDoc(doc(db, 'health_records', recordId), newRecord)
+              setDoc(doc(db, 'health_records', recordId), docData)
                 .catch(err => console.error('Error saving health record to Firestore:', err));
 
               setRecords(prev => [newRecord, ...prev]);
