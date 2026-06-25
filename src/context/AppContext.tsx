@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { db } from '../utils/firebase';
+import { collection, getDocs, addDoc, doc, getDoc, updateDoc, query, orderBy, setDoc } from 'firebase/firestore';
 
 // Interfaces for MediGuard AI state
 // Interfaces for MediGuard AI state
@@ -586,11 +588,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const fetchSignatures = async () => {
     try {
-      const res = await fetch('/consent/signatures');
-      if (res.ok) {
-        const data = await res.json();
-        setSignatures(data);
-      }
+      const q = query(collection(db, 'consent_signatures'), orderBy('created_at', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const data: ConsentSignature[] = [];
+      querySnapshot.forEach((doc) => {
+        data.push({ id: doc.id, ...doc.data() } as ConsentSignature);
+      });
+      setSignatures(data);
     } catch (err) {
       console.error('Error fetching signatures:', err);
     }
@@ -598,14 +602,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const fetchConsentAuditLogs = async () => {
     try {
-      const res = await fetch('/consent/audit-logs');
-      if (res.ok) {
-        const data = await res.json();
-        setConsentAuditLogs(data);
-      }
+      const q = query(collection(db, 'consent_audit_logs'), orderBy('timestamp', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const data: ConsentAuditLog[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const rawData = docSnap.data();
+        data.push({
+          id: docSnap.id as any, // Cast document ID as id
+          user: rawData.user,
+          action: rawData.action,
+          timestamp: rawData.timestamp,
+          consent_id: rawData.consent_id
+        } as ConsentAuditLog);
+      });
+      setConsentAuditLogs(data);
     } catch (err) {
       console.error('Error fetching consent audit logs:', err);
     }
+  };
+
+  const createCanonicalString = (patientId: string, patientName: string, hospital: string, scope: string, duration: string, timestamp: string): string => {
+    const parts = [
+      `duration=${duration}`,
+      `hospital=${hospital}`,
+      `patient_id=${patientId}`,
+      `patient_name=${patientName}`,
+      `scope=${scope}`,
+      `timestamp=${timestamp}`
+    ];
+    return parts.join('|');
+  };
+
+  const generateSHA256Hash = async (canonicalStr: string): Promise<string> => {
+    const msgBuffer = new TextEncoder().encode(canonicalStr);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
   };
 
   const signConsent = async (payload: {
@@ -617,44 +650,174 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     timestamp: string;
     consent_id?: string;
   }) => {
-    const res = await fetch('/consent/sign', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.detail || 'Failed to sign consent');
+    try {
+      const consent_id = payload.consent_id || `CON-${Math.floor(Date.now() / 1000)}`;
+      
+      // Calculate year-based signature count to generate ID: SIG-2026-XXX
+      const year = new Date().getFullYear();
+      const q = query(collection(db, 'consent_signatures'));
+      const querySnapshot = await getDocs(q);
+      let count = 0;
+      querySnapshot.forEach((doc) => {
+        if (doc.id.startsWith(`SIG-${year}-`)) {
+          count++;
+        }
+      });
+      const signature_id = `SIG-${year}-${String(count + 1).padStart(3, '0')}`;
+
+      // Calculate SHA-256 hash client-side
+      const canonicalStr = createCanonicalString(
+        payload.patient_id,
+        payload.patient_name,
+        payload.hospital,
+        payload.scope,
+        payload.duration,
+        payload.timestamp
+      );
+      const sig_hash = await generateSHA256Hash(canonicalStr);
+      const created_at_iso = new Date().toISOString();
+
+      const newSignature = {
+        consent_id,
+        patient_id: payload.patient_id,
+        patient_name: payload.patient_name,
+        hospital: payload.hospital,
+        scope: payload.scope,
+        duration: payload.duration,
+        timestamp: payload.timestamp,
+        signature_hash: sig_hash,
+        created_at: created_at_iso,
+        verification_status: 'Integrity Verified'
+      };
+
+      // Store in Firebase Firestore
+      await setDoc(doc(db, 'consent_signatures', signature_id), newSignature);
+
+      // Create Audit Log entry
+      await addDoc(collection(db, 'consent_audit_logs'), {
+        user: payload.patient_name,
+        action: 'Consent Signed',
+        consent_id,
+        timestamp: created_at_iso
+      });
+
+      await fetchSignatures();
+      await fetchConsentAuditLogs();
+
+      return { id: signature_id, ...newSignature };
+    } catch (err: any) {
+      console.error('Error signing consent:', err);
+      throw new Error(err.message || 'Failed to sign consent');
     }
-    const data = await res.json();
-    fetchSignatures();
-    fetchConsentAuditLogs();
-    return data;
   };
 
   const verifyConsent = async (id: string) => {
-    const res = await fetch(`/consent/verify/${id}`);
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.detail || 'Failed to verify consent');
+    try {
+      // Find signature by document ID first, then fallback to searching by consent_id
+      let signatureDoc = await getDoc(doc(db, 'consent_signatures', id));
+      let signatureData = signatureDoc.exists() ? signatureDoc.data() : null;
+      let signatureId = id;
+
+      if (!signatureData) {
+        // Fallback search by consent_id
+        const q = query(collection(db, 'consent_signatures'));
+        const querySnapshot = await getDocs(q);
+        querySnapshot.forEach((docSnap) => {
+          if (docSnap.data().consent_id === id) {
+            signatureData = docSnap.data();
+            signatureId = docSnap.id;
+          }
+        });
+      }
+
+      if (!signatureData) {
+        throw new Error('Consent signature record not found.');
+      }
+
+      // Re-calculate hash
+      const canonicalStr = createCanonicalString(
+        signatureData.patient_id,
+        signatureData.patient_name,
+        signatureData.hospital,
+        signatureData.scope,
+        signatureData.duration,
+        signatureData.timestamp
+      );
+      const recalculated_hash = await generateSHA256Hash(canonicalStr);
+
+      const verified = recalculated_hash === signatureData.signature_hash;
+      const verification_status = verified ? 'Integrity Verified' : 'Tampered';
+      const created_at_iso = new Date().toISOString();
+
+      // Log verification audit event
+      await addDoc(collection(db, 'consent_audit_logs'), {
+        user: signatureData.patient_name,
+        action: verified ? 'Consent Verified' : 'Consent Verification Failed (Tampered)',
+        consent_id: signatureData.consent_id,
+        timestamp: created_at_iso
+      });
+
+      await fetchConsentAuditLogs();
+
+      return {
+        verified,
+        status: verification_status,
+        signature_id: signatureId,
+        consent_id: signatureData.consent_id,
+        patient_name: signatureData.patient_name,
+        hospital: signatureData.hospital,
+        scope: signatureData.scope,
+        duration: signatureData.duration,
+        timestamp: signatureData.timestamp,
+        signature_hash: signatureData.signature_hash,
+        created_at: signatureData.created_at
+      };
+    } catch (err: any) {
+      console.error('Error verifying consent:', err);
+      throw new Error(err.message || 'Failed to verify consent');
     }
-    const data = await res.json();
-    fetchConsentAuditLogs();
-    return data;
   };
 
   const revokeConsent = async (consentId: string) => {
-    const res = await fetch(`/consent/revoke/${consentId}`, {
-      method: 'POST',
-    });
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.detail || 'Failed to revoke consent');
+    try {
+      // Find document ID by consent_id
+      const q = query(collection(db, 'consent_signatures'));
+      const querySnapshot = await getDocs(q);
+      let signatureId = null;
+      let signatureData: any = null;
+      
+      querySnapshot.forEach((docSnap) => {
+        if (docSnap.data().consent_id === consentId) {
+          signatureId = docSnap.id;
+          signatureData = docSnap.data();
+        }
+      });
+
+      if (!signatureId || !signatureData) {
+        throw new Error('Consent record not found.');
+      }
+
+      // Update status in Firestore
+      await updateDoc(doc(db, 'consent_signatures', signatureId), {
+        verification_status: 'Revoked'
+      });
+
+      const created_at_iso = new Date().toISOString();
+
+      // Create Revoke Audit Log
+      await addDoc(collection(db, 'consent_audit_logs'), {
+        user: signatureData.patient_name,
+        action: 'Consent Revoked',
+        consent_id: consentId,
+        timestamp: created_at_iso
+      });
+
+      await fetchSignatures();
+      await fetchConsentAuditLogs();
+    } catch (err: any) {
+      console.error('Error revoking consent:', err);
+      throw new Error(err.message || 'Failed to revoke consent');
     }
-    fetchSignatures();
-    fetchConsentAuditLogs();
   };
 
   // Emergency Contacts
