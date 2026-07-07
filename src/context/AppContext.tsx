@@ -135,6 +135,7 @@ export interface EmergencyContact {
   relation: string;
   phone: string;
   status: 'Authorized' | 'Revoked';
+  owner?: string;
 }
 
 export interface RegisteredUser {
@@ -507,8 +508,8 @@ const defaultAuditLogs: AuditLog[] = [
 
 // Seeding Default Emergency Contacts
 const defaultEmergencyContacts: EmergencyContact[] = [
-  { id: 'cont_1', name: 'Eleanor Vance', relation: 'Spouse / Primary Proxy', phone: '+1 (555) 832-1920', status: 'Authorized' },
-  { id: 'cont_2', name: 'Dr. Marcus Vance', relation: 'Brother / Secondary Proxy', phone: '+1 (555) 293-8472', status: 'Authorized' }
+  { id: 'cont_1', name: 'Eleanor Vance', relation: 'Spouse / Primary Proxy', phone: '+1 (555) 832-1920', status: 'Authorized', owner: 'Jonathan Vance' },
+  { id: 'cont_2', name: 'Dr. Marcus Vance', relation: 'Brother / Secondary Proxy', phone: '+1 (555) 293-8472', status: 'Authorized', owner: 'Jonathan Vance' }
 ];
 
 // Seeding Default Registered Users
@@ -1852,7 +1853,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name,
       relation,
       phone,
-      status: 'Authorized'
+      status: 'Authorized',
+      owner: currentPatientName
     };
     
     setEmergencyContacts(prev => [...prev, newContact]);
@@ -2049,6 +2051,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const filteredEmergencyContacts = emergencyContacts.filter(
+    c => c.owner && c.owner.toLowerCase() === currentPatientName.toLowerCase()
+  );
+
   return (
     <AppContext.Provider value={{
       activeTab,
@@ -2077,7 +2083,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       activeEmergencyReason,
       triggerBreakGlass,
       deactivateBreakGlass,
-      emergencyContacts,
+      emergencyContacts: filteredEmergencyContacts,
       addEmergencyContact,
       optInResearch,
       setOptInResearch,
