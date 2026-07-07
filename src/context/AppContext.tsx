@@ -233,6 +233,7 @@ interface AppContextType {
   deactivateBreakGlass: () => void;
   emergencyContacts: EmergencyContact[];
   addEmergencyContact: (name: string, relation: string, phone: string) => void;
+  deleteEmergencyContact: (contactId: string) => void;
   
   // AI Insights / Rewards
   optInResearch: boolean;
@@ -1861,6 +1862,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveEmergencyContact(newContact).catch(e => console.warn('Offline: emergency contact not synced:', e));
   };
 
+  const deleteEmergencyContact = async (contactId: string) => {
+    setEmergencyContacts(prev => prev.filter(c => c.id !== contactId));
+    deleteDocById('emergency_contacts', contactId).catch(e => 
+      console.warn('Offline: emergency contact deletion not synced:', e)
+    );
+  };
+
   const recordGuardianCheck = async (drugName: string, riskLevel: string, status: 'PASSED' | 'OVERRIDDEN' | 'BLOCKED', details: string) => {
     const latestLog = auditLogs[0];
     const newBlockHash = generateMockHash();
@@ -2085,6 +2093,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deactivateBreakGlass,
       emergencyContacts: filteredEmergencyContacts,
       addEmergencyContact,
+      deleteEmergencyContact,
       optInResearch,
       setOptInResearch,
       rewardTokens,

@@ -10,7 +10,8 @@ import {
   AlertTriangle,
   Lock,
   X,
-  ShieldCheck
+  ShieldCheck,
+  Trash2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card';
@@ -26,6 +27,7 @@ export const EmergencyView: React.FC = () => {
     deactivateBreakGlass, 
     emergencyContacts, 
     addEmergencyContact,
+    deleteEmergencyContact,
     records,
     user,
     providers,
@@ -524,6 +526,13 @@ export const EmergencyView: React.FC = () => {
                   <span className="px-2.5 py-0.5 bg-emerald-50 border border-emerald-100 text-emerald-700 text-[9px] rounded-full font-bold">
                     {contact.status}
                   </span>
+                  <button
+                    onClick={() => deleteEmergencyContact(contact.id)}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                    title="Delete Proxy"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               </div>
             ))}
