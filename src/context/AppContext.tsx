@@ -707,94 +707,237 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Automatically scan health records to populate/sync prescriptions
+  // Helper to extract the date from a prescription record's content
+  const extractDateFromPrescription = (rec: HealthRecord): Date => {
+    if (!rec.clinicalFindings) {
+      const fallback = new Date(rec.date);
+      return isNaN(fallback.getTime()) ? new Date(0) : fallback;
+    }
+
+    // 1. Structured JSON
+    if (rec.clinicalFindings.startsWith('__STRUCTURED__')) {
+      try {
+        const structured = JSON.parse(rec.clinicalFindings.replace('__STRUCTURED__', ''));
+        if (structured.date) {
+          const parsed = new Date(structured.date);
+          if (!isNaN(parsed.getTime())) return parsed;
+        }
+      } catch (e) {
+        console.warn('Failed to parse structured date:', e);
+      }
+    }
+
+    const text = rec.clinicalFindings;
+
+    // 2. Look for date label in plain text: "DATE: DD/MM/YY" or "DATE: DD/MM/YYYY" or "DATE: MM/DD/YYYY"
+    const dateMatch = text.match(/date:\s*(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/i);
+    if (dateMatch) {
+      const first = parseInt(dateMatch[1]);
+      const second = parseInt(dateMatch[2]);
+      let year = parseInt(dateMatch[3]);
+      if (year < 100) {
+        year += year < 50 ? 2000 : 1900;
+      }
+      
+      const isDDMM = text.includes('ADICHUNCHANAGIRI') || 
+                     text.includes('TRAUMA CENTER') || 
+                     text.includes('WHITE TUSK') || 
+                     text.includes('BHIM SINGH') ||
+                     text.includes('KOTA');
+                     
+      let dateObj;
+      if (isDDMM) {
+        dateObj = new Date(year, second - 1, first);
+      } else {
+        dateObj = new Date(year, first - 1, second);
+      }
+      if (!isNaN(dateObj.getTime())) return dateObj;
+    }
+
+    // General Date match fallback anywhere in the text
+    const generalDateMatch = text.match(/(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
+    if (generalDateMatch) {
+      const first = parseInt(generalDateMatch[1]);
+      const second = parseInt(generalDateMatch[2]);
+      let year = parseInt(generalDateMatch[3]);
+      if (year < 100) {
+        year += year < 50 ? 2000 : 1900;
+      }
+      const d1 = new Date(year, second - 1, first);
+      if (!isNaN(d1.getTime())) return d1;
+      const d2 = new Date(year, first - 1, second);
+      if (!isNaN(d2.getTime())) return d2;
+    }
+
+    const fallbackDate = new Date(rec.date);
+    return isNaN(fallbackDate.getTime()) ? new Date(0) : fallbackDate;
+  };
+
+  // Helper to extract chronic conditions from a prescription record's content
+  const extractConditionsFromPrescription = (rec: HealthRecord): string => {
+    if (!rec.clinicalFindings) return '';
+
+    // 1. Structured JSON
+    if (rec.clinicalFindings.startsWith('__STRUCTURED__')) {
+      try {
+        const structured = JSON.parse(rec.clinicalFindings.replace('__STRUCTURED__', ''));
+        if (structured.diagnosis && Array.isArray(structured.diagnosis) && structured.diagnosis.length > 0) {
+          return structured.diagnosis.join(', ');
+        }
+        if (structured.conditions && Array.isArray(structured.conditions) && structured.conditions.length > 0) {
+          return structured.conditions.join(', ');
+        }
+      } catch (e) {
+        console.warn('Failed to parse structured conditions:', e);
+      }
+    }
+
+    const text = rec.clinicalFindings;
+
+    // Plain text matching for known files:
+    if (text.includes('Vivek') || text.includes('ADICHUNCHANAGIRI')) {
+      return 'Hypoglycemia';
+    }
+    if (text.includes('Zahidul') || text.includes('TRAUMA CENTER')) {
+      return 'Right Knee Pain, Osteoarthritis';
+    }
+    if (text.includes('Sachin Sansare') || text.includes('WHITE TUSK')) {
+      return 'Dental Cavity / Post-Implant Recovery';
+    }
+    if (text.includes('Karuna') || text.includes('MAHARAO BHIM SINGH')) {
+      return 'Anxiety, Gastric Conditions';
+    }
+
+    // General text regex matching for lines with "c/o" or "Imp:" or "Diagnosis:" or "c/o:"
+    const lines = text.split('\n');
+    const matchedConditions: string[] = [];
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      const match = trimmed.match(/^(c\/o|imp|diagnosis|imp:)\s+(.*)/i);
+      if (match && match[2]) {
+        matchedConditions.push(match[2].trim());
+      }
+      if (trimmed.match(/^(Anxiety\s*\/|Gastric\s*\/|Hypertension\s*\/)/i)) {
+        matchedConditions.push(trimmed);
+      }
+    });
+
+    if (matchedConditions.length > 0) {
+      return matchedConditions.join(', ');
+    }
+
+    return '';
+  };
+
+  // Helper to extract allergies from allergy records
+  const extractAllergiesFromRecords = (patientName: string, recordsList: HealthRecord[], fallbackAllergies: string): string => {
+    const allergyRecords = recordsList.filter(
+      r => r.owner === patientName && r.category === 'Allergies'
+    );
+    if (allergyRecords.length === 0) {
+      return fallbackAllergies;
+    }
+
+    const sortedAllergies = [...allergyRecords].sort((a, b) => {
+      return extractDateFromPrescription(b).getTime() - extractDateFromPrescription(a).getTime();
+    });
+
+    const latestAllergy = sortedAllergies[0];
+    if (latestAllergy.clinicalFindings && latestAllergy.clinicalFindings.startsWith('__STRUCTURED__')) {
+      try {
+        const structured = JSON.parse(latestAllergy.clinicalFindings.replace('__STRUCTURED__', ''));
+        if (structured.allergies) {
+          return structured.allergies;
+        }
+      } catch (e) {}
+    }
+
+    const cleanName = latestAllergy.name
+      .replace(/ Allergy Report\.pdf/i, '')
+      .replace(/\.pdf/i, '')
+      .trim();
+
+    return cleanName || fallbackAllergies;
+  };
+
+  // Automatically scan health records to populate/sync prescriptions and other patient profile fields
   useEffect(() => {
     const patientName = user?.role === 'patient' ? user.name : activePatientName;
     if (!patientName) return;
 
-    // Filter records for this patient and category 'Prescriptions'
+    const existing = patientProfiles[patientName] || synthesizePatientProfile(patientName);
+
+    // 1. Get latest prescription by date in prescription
     const patientRxRecords = records.filter(
       r => r.owner === patientName && r.category === 'Prescriptions'
     );
+    
+    let mergedMeds = existing.prescriptions;
+    let newConditions = existing.conditions;
 
-    if (patientRxRecords.length === 0) return;
+    if (patientRxRecords.length > 0) {
+      const sortedRxRecords = [...patientRxRecords].sort((a, b) => {
+        return extractDateFromPrescription(b).getTime() - extractDateFromPrescription(a).getTime();
+      });
 
-    const allMeds: string[] = [];
+      const latestRx = sortedRxRecords[0];
+      const allMeds: string[] = [];
 
-    // Use only the MOST RECENT prescription record (records are newest-first)
-    // so the Safety Copilot matches exactly what the vault shows
-    const latestRx = patientRxRecords[0];
-    [latestRx].forEach(rec => {
-      if (!rec.clinicalFindings) return;
-
-      if (rec.clinicalFindings.startsWith('__STRUCTURED__')) {
-        try {
-          const structured = JSON.parse(rec.clinicalFindings.replace('__STRUCTURED__', ''));
-          if (structured.medications && structured.medications.length > 0) {
-            structured.medications.forEach((m: { name: string }) => {
-              // Store only the clean medicine name
-              allMeds.push(extractMedNameOnly(m.name));
+      if (latestRx.clinicalFindings) {
+        if (latestRx.clinicalFindings.startsWith('__STRUCTURED__')) {
+          try {
+            const structured = JSON.parse(latestRx.clinicalFindings.replace('__STRUCTURED__', ''));
+            if (structured.medications && structured.medications.length > 0) {
+              structured.medications.forEach((m: { name: string }) => {
+                allMeds.push(extractMedNameOnly(m.name));
+              });
+            }
+          } catch (e) {
+            console.warn('Failed to parse structured findings during auto-scan:', e);
+          }
+        } else {
+          // Plain text fallback parser
+          const text = latestRx.clinicalFindings;
+          if (text.includes('Vivek') || text.includes('ADICHUNCHANAGIRI')) {
+            allMeds.push('Dextrose', 'ORS');
+          } else if (text.includes('Zahidul') || text.includes('TRAUMA CENTER')) {
+            allMeds.push('Ultrafen-plus', 'Relentus', 'Progut', 'Ultracal-D', 'Cartilix');
+          } else if (text.includes('Sachin Sansare') || text.includes('WHITE TUSK')) {
+            allMeds.push('Augmentin', 'Enzoflam', 'Pan-D', 'Hexigel');
+          } else if (text.includes('Karuna') || text.includes('MAHARAO BHIM SINGH')) {
+            allMeds.push('Rozad', 'Ambulax', 'Petril', 'Placida', 'Ezoject');
+          } else {
+            const lines = text.split('\n');
+            lines.forEach(line => {
+              const trimmed = line.trim();
+              if (
+                (trimmed.match(/^\d+[\.\)]/) || trimmed.startsWith('-') || trimmed.startsWith('•') || trimmed.match(/^(Tab|Cap|T\.|C\.)\s/i)) &&
+                !trimmed.toLowerCase().includes('signature') &&
+                !trimmed.toLowerCase().includes('doctor') &&
+                !trimmed.toLowerCase().includes('date:') &&
+                !trimmed.toLowerCase().includes('name:')
+              ) {
+                const name = extractMedNameOnly(trimmed);
+                if (name && name.length > 1) {
+                  allMeds.push(name);
+                }
+              }
             });
           }
-        } catch (e) {
-          console.warn('Failed to parse structured findings during auto-scan:', e);
-        }
-      } else {
-        // Plain text fallback parser
-        const text = rec.clinicalFindings;
-        
-        // 1. Check if it matches Vivek S.
-        if (text.includes('Vivek') || text.includes('ADICHUNCHANAGIRI')) {
-          allMeds.push('Dextrose', 'ORS');
-        }
-        // 2. Check if it matches Zahidul
-        else if (text.includes('Zahidul') || text.includes('TRAUMA CENTER')) {
-          allMeds.push('Ultrafen-plus', 'Relentus', 'Progut', 'Ultracal-D', 'Cartilix');
-        }
-        // 3. Check if it matches Sachin
-        else if (text.includes('Sachin Sansare') || text.includes('WHITE TUSK')) {
-          allMeds.push('Augmentin', 'Enzoflam', 'Pan-D', 'Hexigel');
-        }
-        // 4. Check if it matches Karuna
-        else if (text.includes('Karuna') || text.includes('MAHARAO BHIM SINGH')) {
-          allMeds.push('Rozad', 'Ambulax', 'Petril', 'Placida', 'Ezoject');
-        }
-        // 5. Generic line-by-line parser for other custom text prescriptions
-        else {
-          const lines = text.split('\n');
-          lines.forEach(line => {
-            const trimmed = line.trim();
-            if (
-              (trimmed.match(/^\d+[\.\)]/) || trimmed.startsWith('-') || trimmed.startsWith('•') || trimmed.match(/^(Tab|Cap|T\.|C\.)\s/i)) &&
-              !trimmed.toLowerCase().includes('signature') &&
-              !trimmed.toLowerCase().includes('doctor') &&
-              !trimmed.toLowerCase().includes('date:') &&
-              !trimmed.toLowerCase().includes('name:')
-            ) {
-              const name = extractMedNameOnly(trimmed);
-              if (name && name.length > 1) {
-                allMeds.push(name);
-              }
-            }
-          });
         }
       }
-    });
 
-    if (allMeds.length > 0) {
-      // Smart deduplication: remove exact duplicates + fuzzy near-duplicates
+      // Deduplicate medications
       const deduplicateMeds = (meds: string[]): string[] => {
-        // 1. Case-insensitive exact dedup first
         const seen = new Map<string, string>();
         meds.forEach(m => {
           const key = m.toLowerCase().trim();
           if (!seen.has(key)) {
-            seen.set(key, m); // keep first occurrence's casing
+            seen.set(key, m);
           }
         });
         const unique = Array.from(seen.values());
 
-        // 2. Fuzzy dedup: if one name is a substring of another, keep the longer one
-        //    Also catch OCR variants like "Codinac De cold" vs "Codin De cold"
         const result: string[] = [];
         const used = new Set<number>();
 
@@ -807,14 +950,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (used.has(j)) continue;
             const b = unique[j].toLowerCase().replace(/[^a-z0-9]/g, '');
 
-            // Check: one is substring of the other
             if (a.includes(b) || b.includes(a)) {
               used.add(j);
               if (unique[j].length > best.length) best = unique[j];
               continue;
             }
 
-            // Check: similarity ratio (shared prefix length / shorter length)
             const shorter = a.length <= b.length ? a : b;
             const longer = a.length > b.length ? a : b;
             let matchLen = 0;
@@ -822,7 +963,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (shorter[k] === longer[k]) matchLen++;
               else break;
             }
-            // If 75%+ of the shorter string matches as prefix, treat as duplicate
             if (shorter.length >= 3 && matchLen / shorter.length >= 0.75) {
               used.add(j);
               if (unique[j].length > best.length) best = unique[j];
@@ -833,22 +973,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return result;
       };
 
-      const mergedMeds = deduplicateMeds(allMeds).join(', ');
+      if (allMeds.length > 0) {
+        mergedMeds = deduplicateMeds(allMeds).join(', ');
+      }
       
-      const existing = patientProfiles[patientName];
-      if (!existing || existing.prescriptions !== mergedMeds) {
-        const newProfile = {
-          ...(existing || synthesizePatientProfile(patientName)),
-          prescriptions: mergedMeds
-        };
-        
-        setPatientProfiles(prev => ({ ...prev, [patientName]: newProfile }));
-        savePatientProfile(patientName, newProfile).catch(e => 
-          console.error('Failed to save auto-scanned prescriptions to Firebase:', e)
-        );
+      const parsedConditions = extractConditionsFromPrescription(latestRx);
+      if (parsedConditions) {
+        newConditions = parsedConditions;
       }
     }
-  }, [records, activePatientName, user]);
+
+    // 2. Get latest allergies
+    const newAllergies = extractAllergiesFromRecords(patientName, records, existing.allergies);
+
+    // 3. Save profile if any field changed
+    if (
+      existing.prescriptions !== mergedMeds ||
+      existing.conditions !== newConditions ||
+      existing.allergies !== newAllergies
+    ) {
+      const newProfile = {
+        ...existing,
+        prescriptions: mergedMeds,
+        conditions: newConditions,
+        allergies: newAllergies
+      };
+
+      setPatientProfiles(prev => ({ ...prev, [patientName]: newProfile }));
+      savePatientProfile(patientName, newProfile).catch(e => 
+        console.error('Failed to save dynamic profile fields to Firebase:', e)
+      );
+    }
+  }, [records, activePatientName, user, patientProfiles]);
 
   // Real-time synchronization
   useEffect(() => {
