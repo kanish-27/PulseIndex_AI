@@ -113,80 +113,6 @@ export const VaultView: React.FC = () => {
     }
   };
 
-  // Form states for AI record generator
-  const [aiReportType, setAiReportType] = useState('cardio');
-  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
-  const [batchStep, setBatchStep] = useState<string | null>(null);
-  const [isBatchGenerating, setIsBatchGenerating] = useState(false);
-
-  const handleBatchGenerate = async () => {
-    setIsBatchGenerating(true);
-    
-    const reportsToGenerate: Array<{ name: string; category: HealthRecord['category']; size: string }> = [
-      { name: 'Cardiovascular Risk Assessment.pdf', category: 'Laboratory Reports', size: '210 KB' },
-      { name: 'Diabetes Care Management Plan.pdf', category: 'Medical Records', size: '320 KB' },
-      { name: 'Pharmacogenomic CYP2C19 Report.pdf', category: 'Laboratory Reports', size: '185 KB' },
-      { name: 'Personalized Dietary Blueprint.pdf', category: 'Medical Records', size: '145 KB' }
-    ];
-
-    if (currentPatientProfile.allergies && currentPatientProfile.allergies.toLowerCase() !== 'none') {
-      const allergyName = currentPatientProfile.allergies.split(' (')[0];
-      reportsToGenerate.push({
-        name: `${allergyName} Allergy Report.pdf`,
-        category: 'Allergies' as const,
-        size: '412 KB'
-      });
-    }
-
-    if (currentPatientProfile.prescriptions && currentPatientProfile.prescriptions.toLowerCase() !== 'none') {
-      const rxName = currentPatientProfile.prescriptions.split(' (')[0].replace(', ', ' & ');
-      reportsToGenerate.push({
-        name: `${rxName} Active Prescription.pdf`,
-        category: 'Prescriptions' as const,
-        size: '89 KB'
-      });
-    }
-
-    for (let i = 0; i < reportsToGenerate.length; i++) {
-      const report = reportsToGenerate[i];
-      setBatchStep(`Compiling ${report.name} (${i + 1}/${reportsToGenerate.length})...`);
-      await addRecord(report.name, report.category, report.size);
-    }
-    
-    setBatchStep(null);
-    setIsBatchGenerating(false);
-  };
-
-  const handleGenerateAIReport = async () => {
-    setIsGeneratingAI(true);
-    let fileName = '';
-    let category: HealthRecord['category'] = 'Medical Records';
-    let size = '180 KB';
-    
-    if (aiReportType === 'cardio') {
-      fileName = 'Cardiovascular Risk Assessment.pdf';
-      category = 'Laboratory Reports';
-      size = '210 KB';
-    } else if (aiReportType === 'diabetes') {
-      fileName = 'Diabetes Care Management Plan.pdf';
-      category = 'Medical Records';
-      size = '320 KB';
-    } else if (aiReportType === 'pharmacogenomic') {
-      fileName = 'Pharmacogenomic CYP2C19 Report.pdf';
-      category = 'Laboratory Reports';
-      size = '185 KB';
-    } else {
-      fileName = 'Personalized Dietary Blueprint.pdf';
-      category = 'Medical Records';
-      size = '145 KB';
-    }
-    
-    const newId = await addRecord(fileName, category, size);
-    if (newId) {
-      setSelectedRecordId(newId);
-    }
-    setIsGeneratingAI(false);
-  };
 
   // Filters
   const filteredRecords = records.filter(rec => {
@@ -1926,47 +1852,6 @@ Signature of Doctor: Dr. Sanjeev Saxena (Reg. No. 18819)`}
             </CardContent>
           </Card>
 
-          {/* AI Document Generator Panel */}
-          <Card className="bg-gradient-to-br from-white to-primary-50/20 border border-slate-200">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-bold uppercase tracking-wider text-primary-700 font-sans flex items-center gap-1.5">
-                <Sparkles size={12} className="text-primary-600" /> AI Care Plan Compiler
-              </CardTitle>
-              <CardDescription className="text-[10px] text-slate-500">
-                Compile clinical summaries and care assessments customized to patient demographics.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {hasWriteAccess ? (
-                <div className="space-y-2">
-                  <select
-                    value={aiReportType}
-                    onChange={(e) => setAiReportType(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none font-sans cursor-pointer"
-                    disabled={isGeneratingAI}
-                  >
-                    <option value="cardio">Cardiovascular Risk Assessment</option>
-                    <option value="diabetes">Diabetes Care Management Plan</option>
-                    <option value="pharmacogenomic">Pharmacogenomic CYP2C19 Report</option>
-                    <option value="dietary">Personalized Dietary Blueprint</option>
-                  </select>
-                  
-                  <Button
-                    onClick={handleGenerateAIReport}
-                    disabled={isGeneratingAI}
-                    isLoading={isGeneratingAI}
-                    className="w-full text-xs font-semibold py-2"
-                  >
-                    Compile Clinical Report
-                  </Button>
-                </div>
-              ) : (
-                <p className="text-[10px] text-slate-500 text-center py-1">
-                  Write permissions required to generate AI records.
-                </p>
-              )}
-            </CardContent>
-          </Card>
 
         </div>
 
@@ -1974,48 +1859,27 @@ Signature of Doctor: Dr. Sanjeev Saxena (Reg. No. 18819)`}
         <div className="lg:col-span-8 space-y-6">
           {totalPatientRecords === 0 ? (
             <Card className="bg-white border border-slate-200 shadow-sm p-8 text-center flex flex-col items-center justify-center space-y-6">
-              <div className="w-16 h-16 rounded-2xl bg-primary-50 border border-primary-100 flex items-center justify-center text-primary-600">
-                <Sparkles size={32} className={isBatchGenerating ? "animate-spin" : "animate-pulse"} />
+              <div className="w-16 h-16 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400">
+                <Lock size={32} />
               </div>
               
               <div className="space-y-2 max-w-md">
-                <h3 className="text-lg font-bold text-slate-900">Initialize Patient Health Vault</h3>
+                <h3 className="text-lg font-bold text-slate-900">Sovereign Patient Health Vault</h3>
                 <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                  Welcome, <strong className="text-slate-800">{currentPatientProfile.name}</strong>. Your sovereign clinical vault is ready. 
-                  Generate your custom care plans, pharmacogenomic reports, and cardiovascular health profiles:
+                  Welcome, <strong className="text-slate-800">{currentPatientProfile.name}</strong>. Your secure document vault is empty. Upload your clinical records, active prescriptions, lab reports, or insurance files to securely store them with end-to-end encryption.
                 </p>
                 <div className="flex flex-wrap gap-2 justify-center pt-2">
-                  <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl text-[10px] text-slate-600 font-semibold">Age: {currentPatientProfile.age}</span>
-                  <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl text-[10px] text-slate-600 font-semibold">Gender: {currentPatientProfile.gender}</span>
+                  <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl text-[10px] text-slate-650 font-semibold">Age: {currentPatientProfile.age}</span>
+                  <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl text-[10px] text-slate-650 font-semibold">Gender: {currentPatientProfile.gender}</span>
                   <span className="px-2.5 py-1 bg-rose-50 border border-rose-100 rounded-xl text-[10px] text-rose-700 font-semibold">Allergies: {currentPatientProfile.allergies}</span>
                 </div>
               </div>
 
-              {isBatchGenerating ? (
-                <div className="space-y-3.5 w-full max-w-xs">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="w-full bg-slate-100 border border-slate-200 h-2 rounded-full overflow-hidden relative">
-                      <div className="bg-primary-600 h-full w-[60%] animate-pulse" style={{ width: '100%' }} />
-                    </div>
-                    <span className="text-[10px] text-primary-600 font-bold animate-pulse">{batchStep}</span>
-                  </div>
-                </div>
-              ) : (
-                <Button
-                  onClick={handleBatchGenerate}
-                  disabled={!hasWriteAccess}
-                  variant="primary"
-                  className="text-xs font-semibold py-2.5 px-6"
-                >
-                  Auto-Compile Health Records
-                </Button>
-              )}
-              
-              {!hasWriteAccess && (
-                <p className="text-[10px] text-amber-600 font-sans">
-                  * Write permissions required to initialize vault files.
+              <div className="pt-4 border-t border-slate-100 w-full max-w-md">
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  To get started, use the <strong className="text-slate-700">Upload Document</strong> panel in the sidebar to upload a file.
                 </p>
-              )}
+              </div>
             </Card>
           ) : (
             <>
