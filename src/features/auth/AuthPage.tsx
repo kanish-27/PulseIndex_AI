@@ -5,11 +5,9 @@ import { Card, CardContent } from '../../components/ui/Card';
 import { useApp } from '../../context/AppContext';
 
 export const AuthPage: React.FC = () => {
-  const { login, registerUser } = useApp();
+  const { login, registerUser, resetApplication } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [step, setStep] = useState<'credentials' | 'mfa'>('credentials');
-  const [mfaCode, setMfaCode] = useState(['', '', '', '', '', '']);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -19,13 +17,14 @@ export const AuthPage: React.FC = () => {
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
+  const [regAadhaarId, setRegAadhaarId] = useState('');
   const [regInstitution, setRegInstitution] = useState('');
   const [regLogoText, setRegLogoText] = useState('');
   const [regRole, setRegRole] = useState<'patient' | 'doctor' | 'laboratory'>('doctor');
   const [regType, setRegType] = useState<'Hospital' | 'Laboratory' | 'Pharmacy' | 'Insurance'>('Hospital');
   const [successMessage, setSuccessMessage] = useState('');
 
-  const handleSendCode = (e: React.FormEvent) => {
+  const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !email.includes('@')) {
       setError('Please enter a valid institutional or personal email address.');
@@ -37,43 +36,60 @@ export const AuthPage: React.FC = () => {
     }
     setError('');
     setIsLoading(true);
-    setTimeout(() => {
+    try {
+      const loginRes = await login(email, password);
       setIsLoading(false);
-      setStep('mfa');
-    }, 800);
+      if (!loginRes.success) {
+        setError(loginRes.error || 'Authentication failed. Please verify credentials.');
+      }
+    } catch (err: any) {
+      setIsLoading(false);
+      setError(err.message || 'An unexpected error occurred during login.');
+    }
+  };
+
+  const handlePresetLogin = async (presetEmail: string, presetPass: string) => {
+    setEmail(presetEmail);
+    setPassword(presetPass);
+    setError('');
+    setIsLoading(true);
+    try {
+      const loginRes = await login(presetEmail, presetPass);
+      setIsLoading(false);
+      if (!loginRes.success) {
+        setError(loginRes.error || 'Authentication failed.');
+      }
+    } catch (err: any) {
+      setIsLoading(false);
+      setError(err.message || 'An unexpected error occurred.');
+    }
   };
 
   const handlePasskeySignIn = (e: React.MouseEvent) => {
     e.preventDefault();
-    setIsLoading(true);
-    setError('');
-    setTimeout(() => {
-      setEmail('biometric.key@mediguard.ai');
-      setPassword('hardware_bound_key');
-      setIsLoading(false);
-      setStep('mfa');
-    }, 700);
+    handlePresetLogin('biometric.key@mediguard.ai', 'hardware_bound_key');
   };
 
   const handleRegisterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regName || !regEmail || !regPassword || (regRole !== 'patient' && (!regInstitution || !regLogoText))) {
-      setError('Please fill in all registration fields.');
-      return;
-    }
-    if (!regEmail.includes('@')) {
-      setError('Please enter a valid email address.');
+    if (!regName || !regEmail || !regPassword || (regRole !== 'patient' && (!regInstitution || !regLogoText)) || (regRole === 'patient' && !regAadhaarId)) {
+      setError('Please enter all registration details.');
       return;
     }
     
     setError('');
+    setSuccessMessage('');
     setIsLoading(true);
-    
     setTimeout(() => {
+      const cleanAadhaar = regAadhaarId.replace(/[\s-]/g, '');
+      const formattedAadhaar = `${cleanAadhaar.substring(0, 4)}-${cleanAadhaar.substring(4, 8)}-${cleanAadhaar.substring(8, 12)}`;
+
       registerUser({
         name: regName,
         email: regEmail,
+        password: regPassword,
         role: regRole,
+        aadhaarId: regRole === 'patient' ? formattedAadhaar : undefined,
         ...(regRole !== 'patient' ? {
           institution: regInstitution,
           providerId: `prov_custom_${Date.now()}`,
@@ -92,53 +108,10 @@ export const AuthPage: React.FC = () => {
       setRegName('');
       setRegEmail('');
       setRegPassword('');
+      setRegAadhaarId('');
       setRegInstitution('');
       setRegLogoText('');
     }, 800);
-  };
-
-  const handleMfaSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const codeString = mfaCode.join('');
-    if (codeString.length < 6) {
-      setError('Please enter the full 6-digit authenticator code.');
-      return;
-    }
-    
-    setError('');
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      login(email);
-    }, 1000);
-  };
-
-  const handleMfaChange = (index: number, val: string) => {
-    if (isNaN(Number(val))) return;
-    const newCode = [...mfaCode];
-    newCode[index] = val.substring(val.length - 1);
-    setMfaCode(newCode);
-
-    // Auto-focus next input
-    if (val && index < 5) {
-      const nextInput = document.getElementById(`mfa-${index + 1}`);
-      nextInput?.focus();
-    }
-  };
-
-  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !mfaCode[index] && index > 0) {
-      const prevInput = document.getElementById(`mfa-${index - 1}`);
-      prevInput?.focus();
-    }
-  };
-
-  const fillDemoCode = () => {
-    const demo = ['5', '8', '2', '0', '9', '4'];
-    setMfaCode(demo);
-    setTimeout(() => {
-      document.getElementById('mfa-5')?.focus();
-    }, 50);
   };
 
   return (
@@ -225,30 +198,28 @@ export const AuthPage: React.FC = () => {
           <Card className="border border-slate-200 bg-white shadow-md p-8">
             <CardContent className="p-0">
               {/* Tab Selector */}
-              {step === 'credentials' && (
-                <div className="flex border-b border-slate-100 pb-4 mb-6">
-                  <button
-                    type="button"
-                    onClick={() => { setAuthTab('login'); setError(''); setSuccessMessage(''); }}
-                    className={`flex-1 text-center py-2 text-xs font-semibold uppercase tracking-wider transition-all duration-200 border-b-2
-                      ${authTab === 'login' 
-                        ? 'text-primary-600 border-primary-600 font-bold' 
-                        : 'text-slate-400 border-transparent hover:text-slate-600'}`}
-                  >
-                    Sign In
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setAuthTab('register'); setError(''); setSuccessMessage(''); }}
-                    className={`flex-1 text-center py-2 text-xs font-semibold uppercase tracking-wider transition-all duration-200 border-b-2
-                      ${authTab === 'register' 
-                        ? 'text-primary-600 border-primary-600 font-bold' 
-                        : 'text-slate-400 border-transparent hover:text-slate-600'}`}
-                  >
-                    Create Account
-                  </button>
-                </div>
-              )}
+              <div className="flex border-b border-slate-100 pb-4 mb-6">
+                <button
+                  type="button"
+                  onClick={() => { setAuthTab('login'); setError(''); setSuccessMessage(''); }}
+                  className={`flex-1 text-center py-2 text-xs font-semibold uppercase tracking-wider transition-all duration-200 border-b-2
+                    ${authTab === 'login' 
+                      ? 'text-primary-600 border-primary-600 font-bold' 
+                      : 'text-slate-400 border-transparent hover:text-slate-600'}`}
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthTab('register'); setError(''); setSuccessMessage(''); }}
+                  className={`flex-1 text-center py-2 text-xs font-semibold uppercase tracking-wider transition-all duration-200 border-b-2
+                    ${authTab === 'register' 
+                      ? 'text-primary-600 border-primary-600 font-bold' 
+                      : 'text-slate-400 border-transparent hover:text-slate-600'}`}
+                >
+                  Create Account
+                </button>
+              </div>
 
               {successMessage && (
                 <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 p-3 rounded-xl font-medium mb-5 animate-fade-in">
@@ -256,7 +227,7 @@ export const AuthPage: React.FC = () => {
                 </p>
               )}
 
-              {step === 'credentials' && authTab === 'register' ? (
+              {authTab === 'register' ? (
                 <form onSubmit={handleRegisterSubmit} className="space-y-4 animate-fade-in">
                   <div className="space-y-1">
                     <h2 className="text-lg font-bold text-slate-900 tracking-tight">Onboard Profile</h2>
@@ -372,6 +343,30 @@ export const AuthPage: React.FC = () => {
                       </div>
                     )}
 
+                    {regRole === 'patient' && (
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Aadhaar Card Number</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. 5524-1182-9014"
+                          maxLength={14}
+                          value={regAadhaarId}
+                          onChange={(e) => {
+                            let val = e.target.value.replace(/[^0-9]/g, '');
+                            if (val.length > 4 && val.length <= 8) {
+                              val = `${val.substring(0, 4)}-${val.substring(4)}`;
+                            } else if (val.length > 8) {
+                              val = `${val.substring(0, 4)}-${val.substring(4, 8)}-${val.substring(8, 12)}`;
+                            }
+                            setRegAadhaarId(val);
+                          }}
+                          className="w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 placeholder-slate-400 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 transition-all font-mono"
+                          required
+                          disabled={isLoading}
+                        />
+                      </div>
+                    )}
+
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Email Address</label>
                       <input
@@ -409,7 +404,7 @@ export const AuthPage: React.FC = () => {
                     Create Account
                   </Button>
                 </form>
-              ) : step === 'credentials' ? (
+              ) : (
                 <form onSubmit={handleSendCode} className="space-y-5 animate-fade-in">
                   <div className="space-y-1">
                     <h2 className="text-lg font-bold text-slate-900 tracking-tight">Access Portal</h2>
@@ -476,7 +471,7 @@ export const AuthPage: React.FC = () => {
                     className="w-full text-xs font-semibold py-2.5"
                     rightIcon={<ArrowRight size={14} />}
                   >
-                    Initiate Security Handshake
+                    Sign In Securely
                   </Button>
 
                   {/* Demo Quick Access Section */}
@@ -489,12 +484,7 @@ export const AuthPage: React.FC = () => {
                     <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setEmail('patient@mediguard.ai');
-                          setPassword('patient_passphrase_demo');
-                          setStep('mfa');
-                          setMfaCode(['5', '8', '2', '0', '9', '4']);
-                        }}
+                        onClick={() => handlePresetLogin('patient@mediguard.ai', 'patient_passphrase_demo')}
                         className="p-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-center transition-all group"
                       >
                         <span className="text-xs font-bold text-slate-800 block">Patient</span>
@@ -503,12 +493,7 @@ export const AuthPage: React.FC = () => {
                       
                       <button
                         type="button"
-                        onClick={() => {
-                          setEmail('doctor@sutterhealth.org');
-                          setPassword('doctor_passphrase_demo');
-                          setStep('mfa');
-                          setMfaCode(['5', '8', '2', '0', '9', '4']);
-                        }}
+                        onClick={() => handlePresetLogin('doctor@sutterhealth.org', 'doctor_passphrase_demo')}
                         className="p-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-center transition-all group"
                       >
                         <span className="text-xs font-bold text-slate-800 block">Doctor</span>
@@ -517,78 +502,29 @@ export const AuthPage: React.FC = () => {
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setEmail('lab@questdiagnostics.com');
-                          setPassword('lab_passphrase_demo');
-                          setStep('mfa');
-                          setMfaCode(['5', '8', '2', '0', '9', '4']);
-                        }}
+                        onClick={() => handlePresetLogin('lab@questdiagnostics.com', 'lab_passphrase_demo')}
                         className="p-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-center transition-all group"
                       >
                         <span className="text-xs font-bold text-slate-800 block">Lab Tech</span>
                         <span className="text-[9px] text-slate-400 block mt-0.5 group-hover:text-primary-600 font-mono">Quest</span>
                       </button>
                     </div>
-                  </div>
-                </form>
-              ) : (
-                <div className="space-y-5 animate-fade-in">
-                  <div className="space-y-1">
-                    <h2 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                      <Lock className="text-primary-600" size={18} /> Two-Factor Verification
-                    </h2>
-                    <p className="text-xs text-slate-500">Enter the 6-digit code sent to your registered device</p>
-                  </div>
 
-                  <div className="space-y-4">
-                    <div className="flex justify-between gap-2">
-                      {mfaCode.map((digit, index) => (
-                        <input
-                          key={index}
-                          id={`mfa-${index}`}
-                          type="text"
-                          maxLength={1}
-                          value={digit}
-                          onChange={(e) => handleMfaChange(index, e.target.value)}
-                          onKeyDown={(e) => handleKeyDown(index, e)}
-                          className="w-12 h-12 border border-slate-200 bg-white rounded-xl text-center text-lg font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all font-mono"
-                          disabled={isLoading}
-                        />
-                      ))}
-                    </div>
-
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-400">Security check active</span>
-                      <button 
-                        type="button" 
-                        onClick={fillDemoCode}
-                        className="text-primary-600 hover:text-primary-700 font-semibold flex items-center gap-1.5 transition-colors"
+                    <div className="mt-4 pt-3.5 border-t border-slate-100 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm("Erase all local database items, profiles, and files and start fresh?")) {
+                            resetApplication();
+                          }
+                        }}
+                        className="text-[10px] font-bold text-rose-600 hover:text-rose-800 hover:underline flex items-center gap-1.5"
                       >
-                        <RefreshCw size={12} /> Auto-fill Demo Code
+                        Reset Application Database
                       </button>
                     </div>
                   </div>
-
-                  {error && <p className="text-xs text-danger bg-red-50 border border-red-200 p-2.5 rounded-xl font-medium">{error}</p>}
-
-                  <div className="flex gap-3">
-                    <Button
-                      variant="outline"
-                      onClick={() => { setStep('credentials'); setError(''); }}
-                      disabled={isLoading}
-                      className="flex-1 text-xs py-2"
-                    >
-                      Back
-                    </Button>
-                    <Button
-                      onClick={() => handleMfaSubmit()}
-                      isLoading={isLoading}
-                      className="flex-[2] text-xs font-semibold py-2"
-                    >
-                      Verify Access
-                    </Button>
-                  </div>
-                </div>
+                </form>
               )}
             </CardContent>
           </Card>

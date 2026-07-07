@@ -657,9 +657,19 @@ export const GuardianView: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-3.5">
-                  <div className="flex justify-between items-center p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                    <span className="text-slate-500 font-medium">Patient Details:</span>
-                    <span className="font-bold text-slate-800">{currentPatientProfile.name} ({patientAge} Years Old)</span>
+                  <div className="flex flex-col gap-1 p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500 font-medium">Patient Details:</span>
+                      <span className="font-bold text-slate-800">{currentPatientProfile.name} ({patientAge} Years Old)</span>
+                    </div>
+                    <div className="flex justify-between items-center border-t border-slate-100/50 pt-1 mt-1 text-[10px]">
+                      <span className="text-slate-500 font-medium">Patient UID:</span>
+                      <span className="font-semibold text-slate-700">{currentPatientProfile.patientUid || 'PX-XXXXXX'}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px]">
+                      <span className="text-slate-500 font-medium">Aadhaar Card:</span>
+                      <span className="font-semibold text-slate-700">{currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'}</span>
+                    </div>
                   </div>
 
                   <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl space-y-1">

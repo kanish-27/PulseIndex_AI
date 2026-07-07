@@ -11,7 +11,8 @@ import {
   AlertOctagon,
   ChevronRight,
   ShieldAlert,
-  User
+  User,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -21,6 +22,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     setActiveTab, 
     user, 
     logout, 
+    resetApplication,
     breakGlassActive, 
     activeEmergencyDoctor,
     deactivateBreakGlass,
@@ -142,21 +144,34 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         {/* User profile section */}
         <div className="p-4 border-t border-slate-150 bg-slate-50/50 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-primary-100 flex items-center justify-center font-bold text-primary-700 text-xs">
+            <div className="w-7 h-7 rounded-lg bg-primary-100 flex items-center justify-center font-bold text-primary-700 text-xs flex-shrink-0">
               {user.name.split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase()}
             </div>
-            <div className="truncate w-32">
+            <div className="truncate w-24">
               <div className="text-xs font-semibold text-slate-950 truncate">{user.name}</div>
               <div className="text-[9px] text-slate-500 truncate">{user.email}</div>
             </div>
           </div>
-          <button 
-            onClick={logout}
-            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-danger transition-colors"
-            title="Log Out"
-          >
-            <LogOut size={14} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={() => {
+                if (window.confirm("Erase all local database items, profiles, and files and start fresh?")) {
+                  resetApplication();
+                }
+              }}
+              className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-rose-600 transition-colors"
+              title="Reset Application Database"
+            >
+              <RefreshCw size={13} />
+            </button>
+            <button 
+              onClick={logout}
+              className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-danger transition-colors"
+              title="Log Out"
+            >
+              <LogOut size={14} />
+            </button>
+          </div>
         </div>
       </aside>
 

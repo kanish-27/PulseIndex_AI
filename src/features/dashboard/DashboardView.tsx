@@ -18,6 +18,7 @@ import type { HealthRecord, AccessRequest } from '../../context/AppContext';
 import { ConsentSignatureModal } from '../consent/ConsentSignatureModal';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { Modal } from '../../components/ui/Modal';
 
 export const DashboardView: React.FC = () => {
   const { 
@@ -36,10 +37,24 @@ export const DashboardView: React.FC = () => {
     activePatientName,
     setActivePatientName,
     registeredUsers,
-    currentPatientProfile
+    currentPatientProfile,
+    patientProfiles,
+    updatePatientProfile
   } = useApp();
 
   const [activeRequestToSign, setActiveRequestToSign] = useState<AccessRequest | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Care Team state variables
+  const [isEditCareTeamOpen, setIsEditCareTeamOpen] = useState(false);
+  const [editDocName, setEditDocName] = useState(currentPatientProfile.preferredDoctorName || '');
+  const [editHospitalName, setEditHospitalName] = useState(currentPatientProfile.preferredHospitalName || '');
+
+  // Keep state synchronized with profile changes
+  React.useEffect(() => {
+    setEditDocName(currentPatientProfile.preferredDoctorName || '');
+    setEditHospitalName(currentPatientProfile.preferredHospitalName || '');
+  }, [currentPatientProfile.preferredDoctorName, currentPatientProfile.preferredHospitalName]);
 
   const currentProvider = user && user.role !== 'patient' && providers
     ? providers.find(p => p.id === user.providerId || p.name === user.institution)
@@ -156,17 +171,90 @@ export const DashboardView: React.FC = () => {
                 Connected to HIPAA-compliant medical vault. Target Patient: <strong className="text-slate-800 font-semibold">{currentPatientProfile.name}</strong>.
               </p>
               
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Select Patient:</span>
-                <select
-                  value={activePatientName}
-                  onChange={(e) => setActivePatientName(e.target.value)}
-                  className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 font-sans cursor-pointer hover:border-slate-300 transition-colors"
-                >
-                  {registeredUsers.filter(u => u.role === 'patient').map(p => (
-                    <option key={p.email} value={p.name} className="text-slate-800">{p.name}</option>
-                  ))}
-                </select>
+              <div className="flex flex-wrap items-start gap-3 mt-2">
+                {/* Aadhaar / Name / UID Search */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider whitespace-nowrap">Find Patient:</span>
+                  <input
+                    type="text"
+                    placeholder="Enter Aadhaar, UID or Name"
+                    value={searchQuery}
+                    onChange={(e) => {
+                      const query = e.target.value;
+                      setSearchQuery(query);
+                      const cleanQuery = query.trim().toLowerCase();
+                      if (cleanQuery) {
+                        const matched = registeredUsers.find(u => {
+                          if (u.role !== 'patient') return false;
+                          const profile = patientProfiles[u.name];
+                          const aadhaarMatch = u.aadhaarId?.replace(/[\s-]/g, '').includes(cleanQuery.replace(/[\s-]/g, ''));
+                          const profileAadhaarMatch = profile?.aadhaarId?.replace(/[\s-]/g, '').includes(cleanQuery.replace(/[\s-]/g, ''));
+                          return (
+                            u.name.toLowerCase().includes(cleanQuery) ||
+                            profile?.patientUid?.toLowerCase().includes(cleanQuery) ||
+                            aadhaarMatch || profileAadhaarMatch
+                          );
+                        });
+                        if (matched) setActivePatientName(matched.name);
+                      }
+                    }}
+                    className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 font-sans w-56 placeholder-slate-400 transition-all"
+                  />
+                </div>
+
+                {/* Patient result chip — shown when a match is found via search */}
+                {searchQuery.trim() && (() => {
+                  const cleanQ = searchQuery.trim().toLowerCase();
+                  const found = registeredUsers.find(u => {
+                    if (u.role !== 'patient') return false;
+                    const profile = patientProfiles[u.name];
+                    const aadhaarReg = u.aadhaarId?.replace(/[\s-]/g, '').includes(cleanQ.replace(/[\s-]/g, ''));
+                    const aadhaarProf = profile?.aadhaarId?.replace(/[\s-]/g, '').includes(cleanQ.replace(/[\s-]/g, ''));
+                    return u.name.toLowerCase().includes(cleanQ) || profile?.patientUid?.toLowerCase().includes(cleanQ) || aadhaarReg || aadhaarProf;
+                  });
+                  if (found) {
+                    const profile = patientProfiles[found.name];
+                    return (
+                      <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-1.5 text-xs animate-fade-in">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        <span className="font-bold text-emerald-800">{found.name}</span>
+                        <span className="text-emerald-600 font-mono">{profile?.patientUid || ''}</span>
+                        <span className="text-emerald-500">•</span>
+                        <span className="text-emerald-600">Aadhaar ••••-{(found.aadhaarId || profile?.aadhaarId || '').slice(-4)}</span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl px-3 py-1.5 text-xs animate-fade-in">
+                      <span className="w-2 h-2 rounded-full bg-rose-400" />
+                      <span className="text-rose-700 font-semibold">No patient found matching that Aadhaar / UID</span>
+                    </div>
+                  );
+                })()}
+
+                {/* Quick select dropdown */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider whitespace-nowrap">Or Select:</span>
+                  <select
+                    value={activePatientName}
+                    onChange={(e) => { setActivePatientName(e.target.value); setSearchQuery(''); }}
+                    className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 font-sans cursor-pointer hover:border-slate-300 transition-colors max-w-[260px]"
+                  >
+                    {registeredUsers
+                      .filter(u => u.role === 'patient')
+                      .map(p => {
+                        const profile = patientProfiles[p.name];
+                        const uid = profile?.patientUid || '';
+                        const aadhaar = (p.aadhaarId || profile?.aadhaarId) ? `•••• ${(p.aadhaarId || profile?.aadhaarId || '').slice(-4)}` : '';
+                        return (
+                          <option key={p.email} value={p.name}>
+                            {p.name}{uid ? ` (${uid}` : ''}{aadhaar ? ` • ${aadhaar})` : uid ? ')' : ''}
+                          </option>
+                        );
+                      })
+                    }
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -218,13 +306,44 @@ export const DashboardView: React.FC = () => {
                 </div>
               )}
               <div className="flex items-center gap-3.5 p-4 bg-slate-50/50 border border-slate-100 rounded-xl">
-                <div className="w-12 h-12 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center font-bold text-primary-700 text-sm">
+                <div className="w-12 h-12 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center font-bold text-primary-700 text-sm flex-shrink-0">
                   {currentPatientProfile.name.split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase()}
                 </div>
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900">{currentPatientProfile.name}</h4>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-start">
+                    <h4 className="text-sm font-bold text-slate-900">{currentPatientProfile.name}</h4>
+                    <button 
+                      onClick={() => setIsEditCareTeamOpen(true)}
+                      className="text-[10px] font-bold text-primary-600 hover:text-primary-800 hover:underline bg-primary-50 px-2 py-0.5 border border-primary-100 rounded-lg"
+                    >
+                      Edit Care Team
+                    </button>
+                  </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    MRN: US-{currentPatientProfile.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0).toString(16).toUpperCase()} • {currentPatientProfile.gender}, {currentPatientProfile.age} Years Old
+                    ID: {currentPatientProfile.patientUid || 'PX-XXXXXX'} • Aadhaar: {currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'} • {currentPatientProfile.gender}, {currentPatientProfile.age} Years Old
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Believed Doctor</span>
+                  <p 
+                    onClick={() => setIsEditCareTeamOpen(true)}
+                    className={`font-bold text-xs leading-relaxed cursor-pointer hover:underline
+                      ${currentPatientProfile.preferredDoctorName ? 'text-slate-800' : 'text-slate-400 italic'}`}
+                  >
+                    {currentPatientProfile.preferredDoctorName || 'Not Set (Click to set)'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Primary Clinic / Hospital</span>
+                  <p 
+                    onClick={() => setIsEditCareTeamOpen(true)}
+                    className={`font-bold text-xs leading-relaxed cursor-pointer hover:underline
+                      ${currentPatientProfile.preferredHospitalName ? 'text-slate-800' : 'text-slate-400 italic'}`}
+                  >
+                    {currentPatientProfile.preferredHospitalName || 'Not Set (Click to set)'}
                   </p>
                 </div>
               </div>
@@ -512,8 +631,8 @@ export const DashboardView: React.FC = () => {
         </div>
       </div>
 
-      {/* Pending Access Requests for Patient */}
-      {pendingRequests.length > 0 && (
+      {/* Pending Access Requests for Patient — only those addressed to this patient */}
+      {pendingRequests.filter(r => !r.targetPatientName || r.targetPatientName === user?.name).length > 0 && (
         <Card className="border-amber-200 bg-amber-50/50 shadow-sm animate-fade-in">
           <CardHeader className="pb-3 border-b border-amber-100 flex flex-row items-center justify-between">
             <div>
@@ -529,7 +648,7 @@ export const DashboardView: React.FC = () => {
             </span>
           </CardHeader>
           <CardContent className="p-0 divide-y divide-slate-100 bg-white">
-            {pendingRequests.map((req) => (
+            {pendingRequests.filter(r => !r.targetPatientName || r.targetPatientName === user?.name).map((req) => (
               <div key={req.id} className="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center font-bold text-slate-700 text-sm">
@@ -787,6 +906,61 @@ export const DashboardView: React.FC = () => {
           request={activeRequestToSign}
         />
       )}
+
+      {/* Edit Care Team Modal */}
+      <Modal
+        isOpen={isEditCareTeamOpen}
+        onClose={() => setIsEditCareTeamOpen(false)}
+        title="Edit Trusted Care Team"
+        description="Configure your primary doctor and preferred clinic or hospital."
+      >
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Believed Doctor Name</label>
+            <input
+              type="text"
+              placeholder="e.g., Dr. B. Wasim Akram"
+              value={editDocName}
+              onChange={(e) => setEditDocName(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Preferred Clinic / Hospital Name</label>
+            <input
+              type="text"
+              placeholder="e.g., Nalam Surgical Clinic"
+              value={editHospitalName}
+              onChange={(e) => setEditHospitalName(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsEditCareTeamOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                updatePatientProfile(currentPatientProfile.name, {
+                  preferredDoctorName: editDocName,
+                  preferredHospitalName: editHospitalName
+                });
+                setIsEditCareTeamOpen(false);
+              }}
+            >
+              Save Care Team
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

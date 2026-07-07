@@ -230,8 +230,20 @@ export const EmergencyView: React.FC = () => {
                   <span>A-POSITIVE (A+)</span>
                 </div>
                 <div class="detail-block">
-                  <strong>Patient ID</strong>
-                  <span>US-${currentPatientProfile.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0).toString(16).toUpperCase()}</span>
+                  <strong>Patient UID</strong>
+                  <span>${currentPatientProfile.patientUid || 'PX-XXXXXX'}</span>
+                </div>
+                <div class="detail-block">
+                  <strong>Believed Doctor</strong>
+                  <span>${currentPatientProfile.preferredDoctorName || 'Not Set'}</span>
+                </div>
+                <div class="detail-block">
+                  <strong>Hospital / Clinic</strong>
+                  <span>${currentPatientProfile.preferredHospitalName || 'Not Set'}</span>
+                </div>
+                <div class="detail-block" style="grid-column: span 2;">
+                  <strong>Aadhaar ID (Masked)</strong>
+                  <span>${currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'}</span>
                 </div>
               </div>
               <div class="footer-card">
@@ -344,6 +356,22 @@ export const EmergencyView: React.FC = () => {
                       <span className="text-rose-600 font-bold block">OVERRIDE STATUS</span>
                       <span className="text-rose-950 font-bold">ACTIVE (AUDITED)</span>
                     </div>
+                    <div>
+                      <span className="text-rose-600 font-bold block">BELIEVED DOCTOR</span>
+                      <span className="text-rose-950 font-bold">{currentPatientProfile.preferredDoctorName || 'Not Set'}</span>
+                    </div>
+                    <div>
+                      <span className="text-rose-600 font-bold block">PRIMARY HOSPITAL / CLINIC</span>
+                      <span className="text-rose-950 font-bold">{currentPatientProfile.preferredHospitalName || 'Not Set'}</span>
+                    </div>
+                    <div>
+                      <span className="text-rose-600 font-bold block">PATIENT UID</span>
+                      <span className="text-rose-950 font-bold">{currentPatientProfile.patientUid || 'PX-XXXXXX'}</span>
+                    </div>
+                    <div>
+                      <span className="text-rose-600 font-bold block">PATIENT AADHAAR ID</span>
+                      <span className="text-rose-950 font-bold">{currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'}</span>
+                    </div>
                   </div>
                   <div className="text-[10px] text-rose-800">
                     <span className="text-rose-600 font-bold block">CLINICAL REASONING</span>
@@ -409,7 +437,7 @@ export const EmergencyView: React.FC = () => {
                 <div>
                   <h4 className="text-sm font-bold text-slate-900 tracking-tight">{currentPatientProfile.name.toUpperCase()}</h4>
                   <span className="text-[8px] text-slate-400 font-semibold block mt-1 uppercase">
-                    MRN: US-{currentPatientProfile.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0).toString(16).toUpperCase()}
+                    ID: {currentPatientProfile.patientUid || 'PX-XXXXXX'} • Aadhaar: {currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'}
                   </span>
                 </div>
                 <div className="p-1 bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -427,6 +455,18 @@ export const EmergencyView: React.FC = () => {
                   <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">DRUG ALLERGIES</span>
                   <span className="text-rose-600 font-bold text-[9px] truncate block" title={patientAllergies}>
                     {patientAllergies}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">BELIEVED DOCTOR</span>
+                  <span className="text-slate-900 font-semibold text-[9px] truncate block" title={currentPatientProfile.preferredDoctorName || 'Not Set'}>
+                    {currentPatientProfile.preferredDoctorName || 'Not Set'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">PREFERRED CLINIC / HOSPITAL</span>
+                  <span className="text-slate-900 font-semibold text-[9px] truncate block" title={currentPatientProfile.preferredHospitalName || 'Not Set'}>
+                    {currentPatientProfile.preferredHospitalName || 'Not Set'}
                   </span>
                 </div>
                 <div className="col-span-2">

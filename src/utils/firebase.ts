@@ -1,5 +1,7 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
+import { getStorage } from 'firebase/storage';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import type { Analytics } from 'firebase/analytics';
 
@@ -15,7 +17,10 @@ const firebaseConfig = {
 
 // Guard against duplicate initialization in hot-reload environments
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+
 export const db = getFirestore(app);
+export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 // Initialize analytics conditionally (only in browser and if supported)
 export let analytics: Analytics | null = null;

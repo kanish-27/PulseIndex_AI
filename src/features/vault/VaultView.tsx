@@ -14,18 +14,23 @@ import {
   Sparkles,
   Lock,
   UploadCloud,
-  CheckCircle2
+  CheckCircle2,
+  Trash2,
+  Eye
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import type { HealthRecord } from '../../context/AppContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
+import { Modal } from '../../components/ui/Modal';
 
 export const VaultView: React.FC = () => {
   const { 
     records, 
     addRecord, 
+    deleteRecord,
     user, 
+    registeredUsers,
     providers, 
     pendingRequests, 
     requestAccess, 
@@ -60,6 +65,53 @@ export const VaultView: React.FC = () => {
   const [autoCategory, setAutoCategory] = useState<HealthRecord['category']>('Laboratory Reports');
   const [clinicalFindings, setClinicalFindings] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [rawFile, setRawFile] = useState<File | null>(null);
+
+  // File Preview Modal states
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewName, setPreviewName] = useState<string>('');
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // Save Confirmation Modal state
+  const [isConfirmSaveOpen, setIsConfirmSaveOpen] = useState(false);
+
+  // Password-protected Delete Modal states
+  const [activeRecordToDelete, setActiveRecordToDelete] = useState<HealthRecord | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
+  const handleViewFile = (url: string, name: string) => {
+    setPreviewUrl(url);
+    setPreviewName(name);
+    setIsPreviewOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!activeRecordToDelete) return;
+    
+    // Find current user profile in registered users to check login password
+    const matchingUser = registeredUsers.find(u => u.email === user?.email);
+    if (!matchingUser) {
+      setDeleteError('User profile not found. Please log in again.');
+      return;
+    }
+    
+    if (matchingUser.password !== deletePassword) {
+      setDeleteError('Incorrect password. Please enter the password you use to log in.');
+      return;
+    }
+    
+    try {
+      await deleteRecord(activeRecordToDelete.id);
+      setIsDeleteModalOpen(false);
+      setActiveRecordToDelete(null);
+      setDeletePassword('');
+      setDeleteError('');
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete record.');
+    }
+  };
 
   // Form states for AI record generator
   const [aiReportType, setAiReportType] = useState('cardio');
@@ -275,73 +327,7 @@ export const VaultView: React.FC = () => {
   };
 
   const autoCategorize = (fileName: string, fileSize?: number, aspectRatio?: number): HealthRecord['category'] => {
-    if (isVivekFile(fileName, fileSize, aspectRatio) || isZahidulFile(fileName, fileSize, aspectRatio) || isSachinFile(fileName, fileSize, aspectRatio) || isKarunaFile(fileName, fileSize, aspectRatio)) {
-      return 'Prescriptions';
-    }
-    const lower = fileName.toLowerCase();
-    if (
-      lower.includes('prescription') || 
-      lower.includes('presc') || 
-      lower.includes('rx') || 
-      lower.includes('med') || 
-      lower.includes('pill') || 
-      lower.includes('medication') || 
-      lower.includes('drug') || 
-      lower.includes('recipe') || 
-      lower.includes('lisinopril') || 
-      lower.includes('atorvastatin') || 
-      lower.includes('metformin') || 
-      lower.includes('clopidogrel') || 
-      lower.includes('ibuprofen') || 
-      lower.includes('amoxicillin')
-    ) {
-      return 'Prescriptions';
-    }
-    if (
-      lower.includes('lab') || 
-      lower.includes('report') || 
-      lower.includes('scan') || 
-      lower.includes('mri') || 
-      lower.includes('ct') || 
-      lower.includes('xray') || 
-      lower.includes('x-ray') || 
-      lower.includes('ultrasound') || 
-      lower.includes('lipid') || 
-      lower.includes('blood') || 
-      lower.includes('urine') || 
-      lower.includes('sequencing') || 
-      lower.includes('dna') || 
-      lower.includes('genetic') || 
-      lower.includes('panel') || 
-      lower.includes('biomarker') || 
-      lower.includes('test')
-    ) {
-      return 'Laboratory Reports';
-    }
-    if (
-      lower.includes('allergy') || 
-      lower.includes('allergies') || 
-      lower.includes('allergen') || 
-      lower.includes('hypersensitivity') || 
-      lower.includes('immune') || 
-      lower.includes('anaphylaxis')
-    ) {
-      return 'Allergies';
-    }
-    if (
-      lower.includes('insurance') || 
-      lower.includes('claim') || 
-      lower.includes('bill') || 
-      lower.includes('payment') || 
-      lower.includes('invoice') || 
-      lower.includes('policy') || 
-      lower.includes('coverage') || 
-      lower.includes('anthem') || 
-      lower.includes('blue cross')
-    ) {
-      return 'Insurance Documents';
-    }
-    return 'Medical Records';
+    return 'Prescriptions';
   };
  
   const getInitialTranscription = (fileName: string, category: HealthRecord['category'], fileSize?: number, aspectRatio?: number): string => {
@@ -660,42 +646,14 @@ Uploaded & Secured by MediGuard AI Vault.`;
             } catch (fmtErr) {
               console.warn('Formatting failed, using raw text:', fmtErr);
             }
-            // Fallback: use raw OCR text
-            setClinicalFindings(rawText);
-            setIsClassifying(false);
-            return;
           }
-        } else {
-          const errData = await response.json().catch(() => ({}));
-          console.warn('OCR API error:', errData);
         }
       } catch (ocrErr) {
         console.warn('OCR preprocessing/call failed:', ocrErr);
       }
     }
 
-    // Fallback for non-images or OCR failure
-    // Show a clear message for non-image uploads
-    if (!isImage && fileObject) {
-      setClinicalFindings(`PATIENT NAME: ${user?.name || currentPatientProfile?.name || 'Patient'}
-DOCUMENT READY FOR UPLOAD
---------------------------------------------------------
-File: ${fileName}
-Size: ${sizeStr}
-
-This file type does not support AI prescription scanning.
-For automatic prescription extraction, please upload a
-photo or image (JPEG, PNG, WebP) of your prescription.
-
-Your document will still be securely encrypted and
-stored in your vault after confirmation.
---------------------------------------------------------
-Secured by MediGuard AI Vault.`);
-      setIsClassifying(false);
-      return;
-    }
-
-    setClinicalFindings(getInitialTranscription(fileName, categorized, fileSize, aspectRatio));
+    setClinicalFindings('__NO_TRANSCRIPTION__');
     setIsClassifying(false);
 
   };
@@ -703,18 +661,20 @@ Secured by MediGuard AI Vault.`);
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setRawFile(file);
     runFileClassification(file.name, file.size, file);
   };
 
   const handleUploadConfirm = async () => {
     if (!selectedFile) return;
     setIsUploading(true);
-    const newId = await addRecord(selectedFile.name, autoCategory, selectedFile.size, clinicalFindings);
+    const newId = await addRecord(selectedFile.name, autoCategory, selectedFile.size, clinicalFindings, rawFile ?? undefined);
     if (newId) {
       setSelectedRecordId(newId);
     }
     setSelectedFile(null);
     setClinicalFindings('');
+    setRawFile(null);
     setIsUploading(false);
   };
 
@@ -864,6 +824,72 @@ This record has been exported securely from the Patient Health Vault.
   };
 
   const getMockClinicalPreview = (rec: HealthRecord) => {
+    if (rec.category !== 'Prescriptions') {
+      return (
+        <div className="space-y-4 text-xs font-sans text-center py-8 flex flex-col items-center justify-center">
+          <div className="w-12 h-12 rounded-full bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-450">
+            <Lock size={20} />
+          </div>
+          <div className="space-y-1">
+            <h4 className="text-sm font-bold text-slate-800">File Stored in Original Format</h4>
+            <p className="text-xs text-slate-500 max-w-[320px] leading-relaxed mx-auto">
+              This document is securely encrypted and stored as a raw file. AI transcription is disabled for this category.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    if (!rec.clinicalFindings || rec.clinicalFindings === '__NO_TRANSCRIPTION__') {
+      const patientName = currentPatientProfile?.name || rec.owner || user?.name || 'Patient';
+      const patientAge = currentPatientProfile?.age ? `${currentPatientProfile.age}/F` : '—';
+      const doctorName = currentPatientProfile?.preferredDoctorName || 'Sovereign Health Provider';
+      const hospitalName = currentPatientProfile?.preferredHospitalName || 'MediGuard Health Center';
+
+      return (
+        <div className="space-y-4 text-xs font-sans">
+          {/* Clinic / Doctor Header */}
+          <div className="bg-gradient-to-r from-primary-600 to-primary-700 rounded-xl p-4 text-white">
+            <div className="font-bold text-base leading-tight">{hospitalName}</div>
+            <div className="text-primary-100 text-xs mt-0.5">Sovereign Encryption Network Node</div>
+            <div className="mt-2 pt-2 border-t border-primary-500">
+              <div className="font-semibold text-sm">Dr. {doctorName}</div>
+              <div className="text-primary-200 text-xs">Primary Care Physician</div>
+            </div>
+          </div>
+
+          {/* Patient Info */}
+          <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 grid grid-cols-3 gap-3">
+            <div className="text-center">
+              <div className="text-slate-400 text-[10px] uppercase tracking-wide font-medium">Patient</div>
+              <div className="font-bold text-slate-800 mt-0.5 truncate">{patientName}</div>
+            </div>
+            <div className="text-center border-x border-slate-200">
+              <div className="text-slate-400 text-[10px] uppercase tracking-wide font-medium">Age/Sex</div>
+              <div className="font-bold text-slate-800 mt-0.5">{patientAge}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-slate-400 text-[10px] uppercase tracking-wide font-medium">Date</div>
+              <div className="font-bold text-slate-800 mt-0.5">{rec.date}</div>
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 text-center space-y-3 shadow-sm min-h-[120px] flex flex-col items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-450">
+              <Lock size={14} />
+            </div>
+            <div className="space-y-1">
+              <h4 className="font-bold text-slate-800">Original Document Secured</h4>
+              <p className="text-[11px] text-slate-500 max-w-[280px] leading-relaxed mx-auto">
+                File stored securely as a raw document. Automated AI medication extraction has been skipped for this record.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (rec.clinicalFindings) {
       // Check if it's structured JSON from the OCR+format pipeline
       if (rec.clinicalFindings.startsWith('__STRUCTURED__')) {
@@ -1846,107 +1872,37 @@ Signature of Doctor: Dr. Sanjeev Saxena (Reg. No. 18819)`}
                             </select>
                           </div>
                           
-                          <div className="space-y-1 mt-1 border-t border-slate-100 pt-2">
-                            <span className="text-[10px] text-slate-400 font-semibold uppercase block">
-                              {clinicalFindings.startsWith('__STRUCTURED__') ? '✨ AI Prescription Preview:' : 'Verified OCR Transcription:'}
-                            </span>
-                            {clinicalFindings.startsWith('__STRUCTURED__') ? (() => {
-                              try {
-                                const data = JSON.parse(clinicalFindings.replace('__STRUCTURED__', ''));
-                                return (
-                                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden text-xs">
-                                    {/* Header */}
-                                    <div className="bg-gradient-to-r from-primary-600 to-primary-700 p-3 text-white">
-                                      <div className="font-bold text-sm">{data.clinic || 'Medical Clinic'}</div>
-                                      {data.clinicAddress && <div className="text-primary-100 text-[10px]">{data.clinicAddress}</div>}
-                                      {data.clinicPhone && <div className="text-primary-200 text-[10px]">📞 {data.clinicPhone}</div>}
-                                      <div className="mt-1.5 pt-1.5 border-t border-primary-500">
-                                        <div className="font-semibold text-[11px]">{data.doctor}</div>
-                                        {data.doctorReg && <div className="text-primary-200 text-[10px]">Reg. No: {data.doctorReg}</div>}
-                                      </div>
-                                    </div>
-                                    <div className="p-3 space-y-3">
-                                      {/* Patient row */}
-                                      <div className="grid grid-cols-3 gap-2 bg-slate-50 rounded-lg p-2">
-                                        <div className="text-center">
-                                          <div className="text-slate-400 text-[9px] uppercase font-semibold">Patient</div>
-                                          <div className="font-bold text-slate-800 text-[11px]">{data.patientName || '—'}</div>
-                                        </div>
-                                        <div className="text-center border-x border-slate-200">
-                                          <div className="text-slate-400 text-[9px] uppercase font-semibold">Age/Sex</div>
-                                          <div className="font-bold text-slate-800 text-[11px]">{data.patientAge || '—'}</div>
-                                        </div>
-                                        <div className="text-center">
-                                          <div className="text-slate-400 text-[9px] uppercase font-semibold">Date</div>
-                                          <div className="font-bold text-slate-800 text-[11px]">{data.date || '—'}</div>
-                                        </div>
-                                      </div>
-                                      {/* Vitals */}
-                                      {data.vitals && data.vitals.length > 0 && (
-                                        <div className="grid grid-cols-4 gap-1">
-                                          {data.vitals.map((v: {label: string; value: string}, i: number) => (
-                                            <div key={i} className="bg-blue-50 border border-blue-100 rounded-lg p-1.5 text-center">
-                                              <div className="text-blue-400 text-[9px] font-medium leading-tight">{v.label}</div>
-                                              <div className="text-blue-800 font-bold text-[11px]">{v.value}</div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      )}
-                                      {/* Diagnosis */}
-                                      {data.diagnosis && data.diagnosis.length > 0 && (
-                                        <div className="flex flex-wrap gap-1">
-                                          {data.diagnosis.map((d: string, i: number) => (
-                                            <span key={i} className="bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2 py-0.5 text-[10px] font-bold">🩺 {d}</span>
-                                          ))}
-                                        </div>
-                                      )}
-                                      {/* Medications */}
-                                      {data.medications && data.medications.length > 0 && (
-                                        <div className="space-y-1.5">
-                                          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Medications</div>
-                                          {data.medications.map((med: {number: number; name: string; dose: string; frequency: string; duration: string}, i: number) => (
-                                            <div key={i} className="flex items-start gap-2 bg-white border border-slate-100 rounded-lg p-2">
-                                              <span className="bg-primary-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-[9px] font-bold flex-shrink-0">{med.number || i+1}</span>
-                                              <div className="flex-1 min-w-0">
-                                                <div className="font-bold text-slate-800 text-[11px]">{med.name}</div>
-                                                <div className="flex flex-wrap gap-1 mt-1">
-                                                  {med.dose && <span className="bg-violet-50 text-violet-700 rounded px-1.5 py-0.5 text-[9px] font-medium">💊 {med.dose}</span>}
-                                                  {med.frequency && <span className="bg-green-50 text-green-700 rounded px-1.5 py-0.5 text-[9px] font-medium">⏰ {med.frequency}</span>}
-                                                  {med.duration && <span className="bg-orange-50 text-orange-700 rounded px-1.5 py-0.5 text-[9px] font-medium">📅 {med.duration}</span>}
-                                                </div>
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      )}
-                                      {/* Notes */}
-                                      {data.notes && (
-                                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-[10px] text-slate-600">
-                                          <span className="font-semibold text-slate-700">Note: </span>{data.notes}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              } catch {
-                                return <textarea value={clinicalFindings} onChange={(e) => setClinicalFindings(e.target.value)} rows={6} className="w-full p-2 bg-white border border-slate-200 rounded-xl text-[10px] font-mono text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500 leading-normal" />;
-                              }
-                            })() : (
-                              <textarea
-                                value={clinicalFindings}
-                                onChange={(e) => setClinicalFindings(e.target.value)}
-                                rows={6}
-                                className="w-full p-2 bg-white border border-slate-200 rounded-xl text-[10px] font-mono text-slate-750 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 leading-normal"
-                              />
-                            )}
-                          </div>
+                          <div className="space-y-2 mt-1 border-t border-slate-100 pt-2">
+                             <span className="text-[10px] text-slate-400 font-semibold uppercase block">
+                               ✨ AI Prescription Preview:
+                             </span>
+                             {getMockClinicalPreview({
+                               id: '__preview__',
+                               name: selectedFile?.name || '',
+                               category: autoCategory,
+                               date: new Date().toLocaleString(),
+                               institution: 'Self Uploaded (Secure Node)',
+                               owner: user?.name || 'Patient',
+                               hash: '',
+                               encryptionStatus: 'AES-256-GCM Encrypted',
+                               securityStatus: 'Active Encryption',
+                               classification: 'General',
+                               lastAccessed: 'Just now',
+                               accessHistory: [],
+                               size: selectedFile?.size || '',
+                               confidenceScore: 99,
+                               sensitivePIIDetected: false,
+                               blockNumber: 0,
+                               clinicalFindings: clinicalFindings || '__NO_TRANSCRIPTION__',
+                             })}
+                           </div>
                           
                           <Button 
-                            onClick={handleUploadConfirm} 
+                            onClick={() => setIsConfirmSaveOpen(true)} 
                             disabled={isUploading} 
                             className="w-full text-xs font-semibold py-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center justify-center gap-1.5"
                           >
-                            Save & Encrypt to Vault
+                            Review & Save to Vault
                           </Button>
                         </div>
                       )}
@@ -2110,22 +2066,51 @@ Signature of Doctor: Dr. Sanjeev Saxena (Reg. No. 18819)`}
                   {/* Record Viewer Card */}
                   <Card className="relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-1 h-full bg-primary-600" />
-                    <CardHeader className="pb-3 flex flex-row items-center justify-between border-b border-slate-100">
+                    <CardHeader className="pb-3 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100">
                       <div>
                         <CardTitle className="text-md font-bold text-slate-900 flex items-center gap-1.5">
                           <FileText size={18} className="text-primary-600" /> Clinical Report Viewer
                         </CardTitle>
                         <CardDescription className="text-xs text-slate-500">Decrypted document representation & verification details</CardDescription>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs font-semibold py-1 px-3 border-slate-200 hover:bg-slate-50"
-                        onClick={() => exportRecordFile(activeRecord)}
-                        leftIcon={<FileDown size={14} />}
-                      >
-                        Download PDF
-                      </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {activeRecord.fileUrl && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="text-xs font-semibold py-1 px-3 bg-primary-600 hover:bg-primary-700 text-white shadow-sm"
+                            onClick={() => handleViewFile(activeRecord.fileUrl!, activeRecord.name)}
+                            leftIcon={<Eye size={14} />}
+                          >
+                            View File
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs font-semibold py-1 px-3 border-slate-200 hover:bg-slate-50 text-slate-700"
+                          onClick={() => exportRecordFile(activeRecord)}
+                          leftIcon={<FileDown size={14} />}
+                        >
+                          Download PDF
+                        </Button>
+                        {user?.role === 'patient' && activeRecord.owner === user.name && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs font-semibold py-1 px-3 border-rose-200 text-rose-600 hover:bg-rose-50"
+                            onClick={() => {
+                              setActiveRecordToDelete(activeRecord);
+                              setDeletePassword('');
+                              setDeleteError('');
+                              setIsDeleteModalOpen(true);
+                            }}
+                            leftIcon={<Trash2 size={14} />}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </div>
                     </CardHeader>
                     <CardContent className="pt-5 space-y-5 bg-white">
                       {/* Record Metadata Fields */}
@@ -2271,6 +2256,208 @@ Signature of Doctor: Dr. Sanjeev Saxena (Reg. No. 18819)`}
         </div>
 
       </div>
+
+      {/* Save Confirmation Modal */}
+      <Modal
+        isOpen={isConfirmSaveOpen}
+        onClose={() => setIsConfirmSaveOpen(false)}
+        title="Confirm & Preview Before Saving"
+        size="lg"
+      >
+        <div className="space-y-5 font-sans">
+          {/* File Info Banner */}
+          <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
+            <div className="w-10 h-10 rounded-xl bg-primary-100 border border-primary-200 flex items-center justify-center flex-shrink-0">
+              <FileText size={20} className="text-primary-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-bold text-slate-800 text-sm truncate">{selectedFile?.name}</div>
+              <div className="flex items-center gap-3 mt-0.5 text-[11px] text-slate-500">
+                <span>{selectedFile?.size}</span>
+                <span className="w-1 h-1 rounded-full bg-slate-300 inline-block" />
+                <span className="font-semibold text-primary-600">{autoCategory}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-full text-[10px] text-emerald-700 font-bold flex-shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+              AES-256-GCM
+            </div>
+          </div>
+
+          {/* Full Preview */}
+          <div className="space-y-2">
+            <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wide block">Document Preview</span>
+            <div className="border border-slate-200 rounded-2xl overflow-hidden p-3 bg-white">
+              {getMockClinicalPreview({
+                id: '__confirm_preview__',
+                name: selectedFile?.name || '',
+                category: autoCategory,
+                date: new Date().toLocaleString(),
+                institution: 'Self Uploaded (Secure Node)',
+                owner: user?.name || 'Patient',
+                hash: '',
+                encryptionStatus: 'AES-256-GCM Encrypted',
+                securityStatus: 'Active Encryption',
+                classification: 'General',
+                lastAccessed: 'Just now',
+                accessHistory: [],
+                size: selectedFile?.size || '',
+                confidenceScore: 99,
+                sensitivePIIDetected: false,
+                blockNumber: 0,
+                clinicalFindings: clinicalFindings || '__NO_TRANSCRIPTION__',
+              })}
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3 pt-1">
+            <Button
+              variant="outline"
+              className="flex-1 text-sm py-2.5 font-semibold border-slate-200 text-slate-600 hover:bg-slate-50"
+              onClick={() => setIsConfirmSaveOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              className="flex-1 text-sm py-2.5 font-bold bg-emerald-600 hover:bg-emerald-700 text-white border-none shadow-md"
+              disabled={isUploading}
+              onClick={async () => {
+                setIsConfirmSaveOpen(false);
+                await handleUploadConfirm();
+              }}
+              leftIcon={isUploading ? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> : <Lock size={15} />}
+            >
+              {isUploading ? 'Encrypting...' : 'Confirm & Encrypt to Vault'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* File Preview Modal */}
+      <Modal
+        isOpen={isPreviewOpen}
+        onClose={() => {
+          setIsPreviewOpen(false);
+          setPreviewUrl(null);
+        }}
+        title={`Preview: ${previewName}`}
+        size="lg"
+      >
+        <div className="space-y-4 flex flex-col items-center justify-center p-2 bg-slate-50 border border-slate-200 rounded-2xl">
+          {previewUrl ? (() => {
+            const isImg = /\.(png|jpe?g|webp|gif)$/i.test(previewName) || previewUrl.includes('image');
+            const isPdf = /\.pdf/i.test(previewName) || previewUrl.includes('.pdf');
+            
+            if (isImg) {
+              return (
+                <img 
+                  src={previewUrl} 
+                  alt={previewName} 
+                  className="max-w-full max-h-[65vh] object-contain rounded-xl shadow-md border border-slate-200" 
+                />
+              );
+            } else if (isPdf) {
+              return (
+                <iframe 
+                  src={`${previewUrl}#toolbar=0`} 
+                  className="w-full h-[65vh] rounded-xl border border-slate-200 bg-white" 
+                  title={previewName}
+                />
+              );
+            } else {
+              return (
+                <div className="text-center py-12 space-y-4">
+                  <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mx-auto">
+                    <FileText size={32} />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-slate-800 text-sm">Preview Unavailable</h4>
+                    <p className="text-xs text-slate-500 max-w-[280px] leading-relaxed mx-auto">
+                      In-app preview is not supported for this file type. You can download the file to view it on your local device.
+                    </p>
+                  </div>
+                  <a 
+                    href={previewUrl} 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-xs font-bold transition-colors"
+                  >
+                    <FileDown size={14} /> Download Original Document
+                  </a>
+                </div>
+              );
+            }
+          })() : null}
+        </div>
+      </Modal>
+
+      {/* Custom Delete Confirmation Modal */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          setIsDeleteModalOpen(false);
+          setActiveRecordToDelete(null);
+          setDeletePassword('');
+          setDeleteError('');
+        }}
+        title="Verify Password to Delete"
+        size="sm"
+      >
+        <div className="space-y-4 font-sans text-xs">
+          <div className="p-3 bg-rose-50 border border-rose-100 text-rose-800 rounded-xl space-y-1">
+            <span className="font-bold flex items-center gap-1.5 text-xs text-rose-700">
+              <ShieldAlert size={14} /> Critical Action Required
+            </span>
+            <p className="text-[11px] leading-relaxed">
+              You are about to permanently delete <strong>{activeRecordToDelete?.name}</strong>. This file will be deleted from your secure vault and cannot be recovered.
+            </p>
+          </div>
+          
+          <div className="space-y-1.5">
+            <label className="text-slate-500 font-bold block">Enter Login Password</label>
+            <input
+              type="password"
+              value={deletePassword}
+              onChange={(e) => {
+                setDeletePassword(e.target.value);
+                setDeleteError('');
+              }}
+              placeholder="Enter your current password"
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rose-500 focus:border-rose-500"
+            />
+            {deleteError && (
+              <span className="text-rose-600 font-semibold text-[10px] block mt-0.5 animate-pulse">
+                ⚠️ {deleteError}
+              </span>
+            )}
+          </div>
+          
+          <div className="flex gap-2.5 pt-2">
+            <Button
+              variant="outline"
+              className="flex-1 text-xs py-2"
+              onClick={() => {
+                setIsDeleteModalOpen(false);
+                setActiveRecordToDelete(null);
+                setDeletePassword('');
+                setDeleteError('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              className="flex-1 text-xs py-2 bg-rose-600 hover:bg-rose-700 text-white border-none"
+              onClick={handleDeleteConfirm}
+              disabled={!deletePassword}
+            >
+              Confirm Delete
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

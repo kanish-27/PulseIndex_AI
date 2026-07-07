@@ -585,20 +585,21 @@ const server = http.createServer((req, res) => {
                 },
                 {
                   type: 'text',
-                  text: `You are an expert medical document OCR specialist with deep knowledge of doctor handwriting, prescription formats, and clinical shorthand.
+                  text: `You are an expert medical document classifier and prescription OCR specialist.
 
-This image is a DOCTOR'S PRESCRIPTION or MEDICAL DOCUMENT. Extract and transcribe ALL visible text with maximum accuracy.
+FIRST inspect the image and determine its document type. A prescription contains medication orders written or printed by a clinician, usually with drug names and dosage/frequency instructions. MRI/CT/X-ray images or reports, laboratory reports, discharge summaries, bills, insurance documents, and general medical records are NOT prescriptions.
 
 CRITICAL RULES:
-1. Transcribe EXACTLY what is written — preserve original spelling, formatting, and structure
-2. For handwritten text: use your medical knowledge to correctly interpret:
+1. If the document is NOT a prescription, do not transcribe any text and return an empty transcription.
+2. If it IS a prescription, transcribe EXACTLY what is written and preserve its structure.
+3. For handwritten prescription text, use your medical knowledge to interpret:
    - Drug names (even if partially legible - infer from context)
    - Dosage shorthand: QD/OD=once daily, BD/BID=twice daily, TDS/TID=3x daily, QID=4x daily
    - Timing: AC=before meals, PC=after meals, HS=at bedtime, SOS=if needed
    - Rx = prescription, T./Tab. = Tablet, Cap. = Capsule, Inj. = Injection, Syr. = Syrup
    - Numbers like 1+0+1 (morning+afternoon+night), 0+0+1 (night only)
    - mg, mcg, ml, IU, units
-3. Structure the output preserving the original document layout:
+4. Preserve the original prescription layout:
    - Header: Hospital/clinic name, address, doctor credentials
    - Patient info: Name, age/sex, date, ID/OPD number
    - Diagnosis/Chief Complaints (if present)
@@ -608,13 +609,19 @@ CRITICAL RULES:
    - Follow-up date
    - Signature/stamp
 
-4. If text is unclear, make your BEST medical inference and put [?] after uncertain words
-5. Do NOT add commentary, analysis, or explanations
-6. Output ONLY the transcribed prescription text, nothing else`
+5. If prescription text is unclear, make your best medical inference and put [?] after uncertain words.
+6. Return ONLY valid JSON using this schema:
+{
+  "isPrescription": true or false,
+  "documentType": "prescription" | "laboratory_report" | "mri_scan" | "ct_scan" | "xray" | "insurance" | "medical_record" | "unknown",
+  "confidence": number from 0 to 100,
+  "transcription": "full prescription text, or an empty string for every non-prescription"
+}`
                 }
               ]
             }
           ],
+          response_format: { type: 'json_object' },
           temperature: 0.05,
           max_tokens: 2048
         });
@@ -629,7 +636,7 @@ CRITICAL RULES:
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(postData)
           },
-          timeout: 30000
+          timeout: 60000
         };
 
         const ocrResult = await new Promise((resolve, reject) => {
@@ -640,7 +647,12 @@ CRITICAL RULES:
               if (res2.statusCode >= 200 && res2.statusCode < 300) {
                 try {
                   const parsed = JSON.parse(data);
-                  resolve(parsed.choices[0].message.content);
+                  const content = parsed.choices[0].message.content;
+                  const classification = JSON.parse(cleanJsonContent(content));
+                  if (typeof classification.isPrescription !== 'boolean' || !classification.documentType) {
+                    throw new Error('Vision model returned an invalid document classification');
+                  }
+                  resolve(classification);
                 } catch (e) {
                   reject(new Error('Failed to parse OCR response: ' + e.message));
                 }
@@ -655,10 +667,19 @@ CRITICAL RULES:
           req2.end();
         });
 
-        console.log('OCR extraction completed successfully.');
+        console.log(
+          'Vision document classification completed:',
+          ocrResult.documentType,
+          `(${ocrResult.confidence || 0}% confidence)`
+        );
         setCorsHeaders(res);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ text: ocrResult }));
+        res.end(JSON.stringify({
+          isPrescription: ocrResult.isPrescription,
+          documentType: ocrResult.documentType,
+          confidence: ocrResult.confidence,
+          text: ocrResult.isPrescription ? (ocrResult.transcription || '') : ''
+        }));
       } catch (err) {
         console.error('OCR error:', err.message);
         setCorsHeaders(res);
@@ -721,7 +742,7 @@ Rules: translate Tamil to English, expand OD=once daily BD=twice daily TDS=thric
           r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
           r.write(postData); r.end();
         });
-        console.log('Prescription formatting completed.');
+        console.log('Prescription formatting completed. Structured data:', JSON.stringify(structured).substring(0, 300));
         setCorsHeaders(res);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ structured }));
