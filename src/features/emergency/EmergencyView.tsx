@@ -38,20 +38,9 @@ export const EmergencyView: React.FC = () => {
 
   const hasReadAccess = user?.role === 'patient' || (currentProvider?.permissions.read ?? false) || (breakGlassActive && user?.role === 'doctor');
 
-  const patientAllergies = records
-    .filter(r => r.category === 'Allergies')
-    .map(r => r.name.replace(' Allergy Report', '').replace(' Hypersensitivity Report', '').replace('.pdf', ''))
-    .join(', ') || 'None recorded';
-
-  const patientMeds = records
-    .filter(r => r.category === 'Prescriptions')
-    .map(r => r.name.replace(' Prescription', '').replace(' Active Prescription', '').replace('.pdf', '').replace(' & ', ', '))
-    .join(', ') || 'None active';
-
-  const patientHistory = records
-    .filter(r => r.category === 'Medical Records')
-    .map(r => r.name.replace('.pdf', '').replace('.dicom', ''))
-    .join(', ') || 'None recorded';
+  const patientAllergies = currentPatientProfile.allergies || 'None recorded';
+  const patientMeds = currentPatientProfile.prescriptions || 'None active';
+  const patientHistory = currentPatientProfile.conditions || 'None recorded';
 
   const [isBreakGlassModalOpen, setIsBreakGlassModalOpen] = useState(false);
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
