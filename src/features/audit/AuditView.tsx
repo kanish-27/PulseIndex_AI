@@ -19,7 +19,9 @@ export const AuditView: React.FC = () => {
     signatures,
     consentAuditLogs,
     verifyConsent,
-    revokeConsent
+    revokeConsent,
+    currentPatientProfile,
+    user
   } = useApp();
   
   const [search, setSearch] = useState('');
@@ -127,8 +129,35 @@ export const AuditView: React.FC = () => {
     }
   };
 
-  // Filter logs
+  // Filter logs — doctor sees only their own actions; patient sees only their own records
   const filteredLogs = auditLogs.filter(log => {
+    const actorLower = log.actor.toLowerCase();
+    const detailsLower = log.details.toLowerCase();
+
+    if (user?.role === 'doctor') {
+      // Doctor view: only logs where this doctor is the actor
+      const doctorNameLower = (user.name || '').toLowerCase();
+      const isDoctorActor = actorLower.includes(doctorNameLower);
+      if (!isDoctorActor) return false;
+    } else {
+      // Patient view: logs relevant to the active patient profile
+      const patientNameLower = currentPatientProfile.name.toLowerCase();
+
+      const isActorMatch = actorLower.includes(patientNameLower);
+      const isDetailsMatch = detailsLower.includes(patientNameLower);
+      const isSystemLog = ['system auto-router', 'audit ledger daemon', 'system auditor engine', 'ai prescription guardian'].some(t => actorLower.includes(t));
+      const isBreakGlassAction = log.action === 'BREAK_GLASS' || log.action === 'EMERGENCY_DEACTIVATE';
+
+      const otherPatients = ['jonathan vance', 'alice smith', 'sachin', 'zahidul', 'suresh', 'puttamadamma'];
+      const isForOtherPatient = otherPatients.some(name => {
+        if (patientNameLower === name) return false;
+        return actorLower.includes(name) || detailsLower.includes(name);
+      });
+
+      const isRelevant = (isActorMatch || isDetailsMatch || isSystemLog || isBreakGlassAction) && !isForOtherPatient;
+      if (!isRelevant) return false;
+    }
+
     const matchesSearch = log.actor.toLowerCase().includes(search.toLowerCase()) || 
                           log.institution.toLowerCase().includes(search.toLowerCase()) ||
                           log.details.toLowerCase().includes(search.toLowerCase());
@@ -178,115 +207,7 @@ export const AuditView: React.FC = () => {
         </div>
       )}
 
-      {/* Active Digital Consent Signatures Section */}
-      <Card className="border-slate-200">
-        <CardHeader className="pb-3 border-b border-slate-100 flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-sm flex items-center gap-2 text-slate-900">
-              <ShieldCheck className="text-emerald-600" size={16} /> Active Digital Consent Signatures
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-500">
-              Review, verify, or revoke tamper-evident digital consents signed by you.
-            </CardDescription>
-          </div>
-          <span className="text-[10px] bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full text-slate-650 font-bold">
-            {signatures.length} ACTIVE SIGNATURES
-          </span>
-        </CardHeader>
-        <CardContent className="p-0 bg-white">
-          {signatures.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-xs font-semibold">
-              No active digitally signed consents found. Approve incoming access requests to generate signatures.
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {signatures.map((sig) => {
-                const checkState = verifyingMap[sig.id];
-                const isRevoked = sig.verification_status === 'Revoked';
-                
-                return (
-                  <div key={sig.id} className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
-                          {sig.id}
-                        </span>
-                        <span className="text-sm font-bold text-slate-950">{sig.hospital}</span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                          isRevoked 
-                            ? 'bg-rose-50 text-rose-700 border-rose-100' 
-                            : 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                        }`}>
-                          {isRevoked ? '✓ Revoked' : '✓ Digitally Signed'}
-                        </span>
-                        {!isRevoked && (
-                          <>
-                            <span className="text-[10px] bg-emerald-50 text-emerald-750 border border-emerald-100 px-2 py-0.5 rounded-full font-bold">
-                              ✓ Integrity Verified
-                            </span>
-                            <span className="text-[10px] bg-emerald-50 text-emerald-750 border border-emerald-100 px-2 py-0.5 rounded-full font-bold">
-                              ✓ Tamper Protection Active
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <div className="text-xs text-slate-500 flex flex-wrap items-center gap-3 mt-1.5 font-medium">
-                        <span>Scope: <strong className="text-slate-700">{sig.scope}</strong></span>
-                        <span>•</span>
-                        <span>Duration: <strong className="text-slate-700">{sig.duration}</strong></span>
-                        <span>•</span>
-                        <span>Signed At: <strong>{new Date(sig.created_at).toLocaleString()}</strong></span>
-                      </div>
-                      
-                      {/* Technical hash drawer (inline, collapsed by default or displayed upon verify success) */}
-                      {checkState?.status === 'success' && (
-                        <div className="mt-2.5 p-2.5 bg-slate-50 border border-emerald-150 rounded-xl text-[10px] font-mono text-slate-600 space-y-1 animate-slide-in">
-                          <div className="flex justify-between items-center text-[9px] text-emerald-800 font-bold mb-1">
-                            <span>LIVE VERIFICATION ENGINE SUCCESSFUL</span>
-                            <span>MATCH FOUND IN CONSENT LEDGER</span>
-                          </div>
-                          <div className="break-all">
-                            <span className="text-slate-400">SHA-256 digest: </span>
-                            <strong className="text-slate-800">{sig.signature_hash}</strong>
-                          </div>
-                          {checkState.message && (
-                            <div className="text-emerald-700 font-semibold">{checkState.message}</div>
-                          )}
-                        </div>
-                      )}
-                      
-                      {checkState?.status === 'failed' && (
-                        <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-150 rounded-xl text-[10px] font-mono text-rose-700 animate-slide-in">
-                          <span className="font-bold">VERIFICATION FAILURE: </span>
-                          <span>{checkState.message}</span>
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="flex gap-2 self-end md:self-auto">
-                      <button
-                        onClick={() => handleVerifySignature(sig.id)}
-                        disabled={checkState?.status === 'loading' || isRevoked}
-                        className="px-3.5 py-1.5 border border-slate-200 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        {checkState?.status === 'loading' ? 'Verifying...' : 'Verify Seal'}
-                      </button>
-                      {!isRevoked && (
-                        <button
-                          onClick={() => handleRevokeSignature(sig.consent_id)}
-                          className="px-3.5 py-1.5 border border-rose-200 hover:border-rose-300 text-rose-600 bg-rose-50/50 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-                        >
-                          Revoke Access
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+
 
       {/* Ledger Feed table layout */}
       <Card>

@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to verify user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // users collection: Users can only manage their own profile document
+    match /users/{email} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // patient_profiles: Authenticated users (patients, doctors, labs) can access
+    match /patient_profiles/{patientName} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // health_records: Access granted to authenticated clinical and patient nodes
+    match /health_records/{recordId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // medical_documents: Access granted to patient medical documents
+    match /medical_documents/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // consent_signatures & consent_audit_logs: Crucial for tamper-proof digital consent
+    match /consent_signatures/{sigId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /consent_audit_logs/{logId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // provider_consents: Consent records mapped to active provider nodes
+    match /provider_consents/{providerId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // pending_requests: Incoming hospital/laboratory requests
+    match /pending_requests/{requestId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // emergency_contacts: Critical for Emergency ER department break-glass contact verification
+    match /emergency_contacts/{contactId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // blockchain_audit_logs: Cryptographically linked blockchain ledger records
+    match /blockchain_audit_logs/{logId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}

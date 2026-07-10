@@ -11,7 +11,8 @@ import {
   Sparkles,
   User,
   FolderLock,
-  Check
+  Check,
+  Search
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import type { HealthRecord, AccessRequest } from '../../context/AppContext';
@@ -37,6 +38,7 @@ export const DashboardView: React.FC = () => {
     activePatientName,
     setActivePatientName,
     registeredUsers,
+    mongoPatients,
     currentPatientProfile,
     patientProfiles,
     updatePatientProfile
@@ -44,17 +46,25 @@ export const DashboardView: React.FC = () => {
 
   const [activeRequestToSign, setActiveRequestToSign] = useState<AccessRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [docSearchQuery, setDocSearchQuery] = useState('');
+  const [docCategoryFilter, setDocCategoryFilter] = useState('ALL');
 
   // Care Team state variables
   const [isEditCareTeamOpen, setIsEditCareTeamOpen] = useState(false);
   const [editDocName, setEditDocName] = useState(currentPatientProfile.preferredDoctorName || '');
   const [editHospitalName, setEditHospitalName] = useState(currentPatientProfile.preferredHospitalName || '');
+  const [editAge, setEditAge] = useState(currentPatientProfile.age || 30);
+  const [editGender, setEditGender] = useState(currentPatientProfile.gender || 'Female');
+  const [editBloodGroup, setEditBloodGroup] = useState(currentPatientProfile.bloodGroup || 'O+');
 
   // Keep state synchronized with profile changes
   React.useEffect(() => {
     setEditDocName(currentPatientProfile.preferredDoctorName || '');
     setEditHospitalName(currentPatientProfile.preferredHospitalName || '');
-  }, [currentPatientProfile.preferredDoctorName, currentPatientProfile.preferredHospitalName]);
+    setEditAge(currentPatientProfile.age || 30);
+    setEditGender(currentPatientProfile.gender || 'Female');
+    setEditBloodGroup(currentPatientProfile.bloodGroup || 'O+');
+  }, [currentPatientProfile.preferredDoctorName, currentPatientProfile.preferredHospitalName, currentPatientProfile.age, currentPatientProfile.gender, currentPatientProfile.bloodGroup]);
 
   const currentProvider = user && user.role !== 'patient' && providers
     ? providers.find(p => p.id === user.providerId || p.name === user.institution)
@@ -63,7 +73,41 @@ export const DashboardView: React.FC = () => {
   const hasReadAccess = user?.role === 'patient' || (currentProvider?.permissions.read ?? false) || (breakGlassActive && user?.role === 'doctor');
   const hasWriteAccess = user?.role === 'patient' || (currentProvider?.permissions.write ?? false);
 
-  const filteredRecords = records.filter(r => r.owner.toLowerCase() === currentPatientProfile.name.toLowerCase());
+  // Helper to check if data category access is authorized for the current user
+  const isCategoryAllowed = (cat: string) => {
+    if (user?.role === 'patient') return true;
+    if (breakGlassActive && user?.role === 'doctor') return true;
+    if (!currentProvider) return false;
+
+    const cats = currentProvider.dataCategories;
+    const cleanCat = cat.toLowerCase();
+
+    if (cleanCat.includes('prescription')) return !!cats.prescriptions;
+    if (cleanCat.includes('lab') || cleanCat.includes('blood') || cleanCat.includes('allergies') || cleanCat.includes('laboratory')) return !!cats.labResults;
+    if (cleanCat.includes('scan') || cleanCat.includes('mri') || cleanCat.includes('ct') || cleanCat.includes('x-ray') || cleanCat.includes('ultrasound') || cleanCat.includes('ecg') || cleanCat.includes('imaging')) return !!cats.imaging;
+    return !!cats.notes;
+  };
+
+  const filteredRecords = records.filter(r => 
+    r.owner.toLowerCase() === currentPatientProfile.name.toLowerCase() &&
+    isCategoryAllowed(r.category)
+  );
+
+  const displayedDoctorRecords = filteredRecords.filter(r => {
+    const matchesSearch = r.name.toLowerCase().includes(docSearchQuery.toLowerCase()) || 
+                          r.institution.toLowerCase().includes(docSearchQuery.toLowerCase());
+    
+    if (docCategoryFilter === 'ALL') return matchesSearch;
+    
+    const cat = r.category.toLowerCase();
+    const filter = docCategoryFilter.toLowerCase();
+    if (filter === 'prescriptions') return cat.includes('prescription') && matchesSearch;
+    if (filter === 'reports') return (cat.includes('report') || cat.includes('lab') || cat.includes('blood') || cat.includes('laboratory')) && matchesSearch;
+    if (filter === 'imaging') return (cat.includes('scan') || cat.includes('mri') || cat.includes('imaging') || cat.includes('x-ray') || cat.includes('ct')) && matchesSearch;
+    if (filter === 'insurance') return (cat.includes('insurance') || cat.includes('policy')) && matchesSearch;
+    
+    return cat.includes(filter) && matchesSearch;
+  });
 
   const isReadPending = pendingRequests.some(
     r => r.providerName === user?.institution && r.requestedPermission === 'read'
@@ -240,19 +284,18 @@ export const DashboardView: React.FC = () => {
                     onChange={(e) => { setActivePatientName(e.target.value); setSearchQuery(''); }}
                     className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 font-sans cursor-pointer hover:border-slate-300 transition-colors max-w-[260px]"
                   >
-                    {registeredUsers
-                      .filter(u => u.role === 'patient')
-                      .map(p => {
-                        const profile = patientProfiles[p.name];
-                        const uid = profile?.patientUid || '';
-                        const aadhaar = (p.aadhaarId || profile?.aadhaarId) ? `•••• ${(p.aadhaarId || profile?.aadhaarId || '').slice(-4)}` : '';
-                        return (
+                    {/* Only show patients stored in MongoDB — no default seeds */}
+                    {mongoPatients.length === 0 ? (
+                      <option value="" disabled>No patients registered yet</option>
+                    ) : (
+                      mongoPatients
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map(p => (
                           <option key={p.email} value={p.name}>
-                            {p.name}{uid ? ` (${uid}` : ''}{aadhaar ? ` • ${aadhaar})` : uid ? ')' : ''}
+                            {p.name}
                           </option>
-                        );
-                      })
-                    }
+                        ))
+                    )}
                   </select>
                 </div>
               </div>
@@ -488,7 +531,7 @@ export const DashboardView: React.FC = () => {
                 </button>
               )}
             </CardHeader>
-            <CardContent className="pt-4 relative min-h-[180px]">
+            <CardContent className="pt-4 relative min-h-[180px] flex flex-col">
               {!hasReadAccess && (
                 <div className="absolute inset-0 bg-slate-50/90 backdrop-blur-[2px] z-20 flex flex-col items-center justify-center space-y-2 rounded-xl">
                   <FolderLock className="text-slate-400" size={24} />
@@ -498,35 +541,67 @@ export const DashboardView: React.FC = () => {
                   </span>
                 </div>
               )}
-              
-              <div className={`space-y-3 ${!hasReadAccess ? 'opacity-10 pointer-events-none' : ''}`}>
-                {filteredRecords.slice(0, 3).map((rec: HealthRecord) => (
-                  <div 
-                    key={rec.id}
-                    className="p-3.5 bg-slate-50/50 border border-slate-100 rounded-xl flex items-center justify-between hover:bg-slate-100/50 hover:border-slate-200 transition-all duration-200"
+
+              {hasReadAccess && (
+                <div className="flex flex-col sm:flex-row gap-2 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                    <input
+                      type="text"
+                      placeholder="Search vault documents..."
+                      value={docSearchQuery}
+                      onChange={(e) => setDocSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+                    />
+                  </div>
+                  <select
+                    value={docCategoryFilter}
+                    onChange={(e) => setDocCategoryFilter(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer font-medium"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 rounded-lg bg-primary-50 text-primary-600">
-                        <FileText size={16} />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-800">{rec.name}</h4>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[10px] text-slate-500">{rec.institution}</span>
-                          <span className="text-slate-300 text-[10px] font-mono">•</span>
-                          <span className="text-[10px] text-slate-500">{rec.size}</span>
+                    <option value="ALL">All Categories</option>
+                    <option value="prescriptions">Prescriptions</option>
+                    <option value="reports">Laboratory Reports</option>
+                    <option value="imaging">Imaging (MRI, CT)</option>
+                    <option value="insurance">Insurance Documents</option>
+                  </select>
+                </div>
+              )}
+              
+              <div className={`space-y-3 flex-1 overflow-y-auto max-h-[300px] pr-1 ${!hasReadAccess ? 'opacity-10 pointer-events-none' : ''}`}>
+                {displayedDoctorRecords.length > 0 ? (
+                  displayedDoctorRecords.map((rec: HealthRecord) => (
+                    <div 
+                      key={rec.id}
+                      className="p-3.5 bg-slate-50/50 border border-slate-100 rounded-xl flex items-center justify-between hover:bg-slate-100/50 hover:border-slate-200 transition-all duration-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 rounded-lg bg-primary-50 text-primary-600">
+                          <FileText size={16} />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-800">{rec.name}</h4>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] text-slate-500">{rec.institution}</span>
+                            <span className="text-slate-300 text-[10px] font-mono">•</span>
+                            <span className="text-[10px] text-slate-500">{rec.size}</span>
+                          </div>
                         </div>
                       </div>
+                      
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] px-2 py-0.5 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 font-semibold">
+                          {rec.date}
+                        </span>
+                        <Lock size={12} className="text-slate-400" />
+                      </div>
                     </div>
-                    
-                    <div className="flex items-center gap-3">
-                      <span className="text-[10px] px-2 py-0.5 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 font-semibold">
-                        {rec.date}
-                      </span>
-                      <Lock size={12} className="text-slate-400" />
-                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-8 text-slate-400">
+                    <span className="text-xs">No records matching search filters.</span>
                   </div>
-                ))}
+                )}
               </div>
             </CardContent>
           </Card>
@@ -911,10 +986,48 @@ export const DashboardView: React.FC = () => {
       <Modal
         isOpen={isEditCareTeamOpen}
         onClose={() => setIsEditCareTeamOpen(false)}
-        title="Edit Trusted Care Team"
-        description="Configure your primary doctor and preferred clinic or hospital."
+        title="Edit Patient Profile & Care Team"
+        description="Configure your age, gender, blood group, primary doctor, and preferred clinic or hospital."
       >
         <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Age</label>
+              <input
+                type="number"
+                placeholder="e.g., 31"
+                value={editAge}
+                onChange={(e) => setEditAge(Number(e.target.value) || 0)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+              />
+            </div>
+            
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Gender</label>
+              <select
+                value={editGender}
+                onChange={(e) => setEditGender(e.target.value as 'Male' | 'Female')}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium cursor-pointer"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Blood Group</label>
+              <select
+                value={editBloodGroup}
+                onChange={(e) => setEditBloodGroup(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium cursor-pointer"
+              >
+                {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(bg => (
+                  <option key={bg} value={bg}>{bg}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Believed Doctor Name</label>
             <input
@@ -951,12 +1064,15 @@ export const DashboardView: React.FC = () => {
               onClick={() => {
                 updatePatientProfile(currentPatientProfile.name, {
                   preferredDoctorName: editDocName,
-                  preferredHospitalName: editHospitalName
+                  preferredHospitalName: editHospitalName,
+                  age: Number(editAge) || 30,
+                  gender: editGender as 'Male' | 'Female',
+                  bloodGroup: editBloodGroup
                 });
                 setIsEditCareTeamOpen(false);
               }}
             >
-              Save Care Team
+              Save Profile Details
             </Button>
           </div>
         </div>

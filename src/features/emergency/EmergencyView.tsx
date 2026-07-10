@@ -18,6 +18,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../..
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 
+const formatBloodGroupLongName = (bg: string): string => {
+  if (!bg) return 'O-POSITIVE (O+)';
+  const clean = bg.trim().toUpperCase();
+  const isPos = clean.endsWith('+') || clean.includes('POS');
+  const type = clean.replace(/[^ABO]/g, '');
+  const sign = isPos ? 'POSITIVE' : 'NEGATIVE';
+  const symbol = isPos ? '+' : '-';
+  return `${type}-${sign} (${type}${symbol})`;
+};
+
 export const EmergencyView: React.FC = () => {
   const { 
     breakGlassActive, 
@@ -28,6 +38,7 @@ export const EmergencyView: React.FC = () => {
     emergencyContacts, 
     addEmergencyContact,
     deleteEmergencyContact,
+    updatePatientProfile,
     records,
     user,
     providers,
@@ -46,6 +57,33 @@ export const EmergencyView: React.FC = () => {
 
   const [isBreakGlassModalOpen, setIsBreakGlassModalOpen] = useState(false);
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editDocName, setEditDocName] = useState(currentPatientProfile.preferredDoctorName || '');
+  const [editHospitalName, setEditHospitalName] = useState(currentPatientProfile.preferredHospitalName || '');
+  const [editAadhaar, setEditAadhaar] = useState(currentPatientProfile.aadhaarId || '');
+  const [isSaving, setIsSaving] = useState(false);
+
+  React.useEffect(() => {
+    setEditDocName(currentPatientProfile.preferredDoctorName || '');
+    setEditHospitalName(currentPatientProfile.preferredHospitalName || '');
+    setEditAadhaar(currentPatientProfile.aadhaarId || '');
+  }, [currentPatientProfile.preferredDoctorName, currentPatientProfile.preferredHospitalName, currentPatientProfile.aadhaarId]);
+
+  const handleSaveProfileDetails = async () => {
+    setIsSaving(true);
+    try {
+      await updatePatientProfile(currentPatientProfile.name, {
+        preferredDoctorName: editDocName,
+        preferredHospitalName: editHospitalName,
+        aadhaarId: editAadhaar
+      });
+      setIsEditOpen(false);
+    } catch (err) {
+      console.error('Failed saving emergency card details:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   // Form states for Break Glass Simulation
   const [docName, setDocName] = useState('');
@@ -218,7 +256,7 @@ export const EmergencyView: React.FC = () => {
               <div class="grid-details">
                 <div class="detail-block">
                   <strong>Blood Type</strong>
-                  <span>A-POSITIVE (A+)</span>
+                  <span>${formatBloodGroupLongName(currentPatientProfile.bloodGroup || 'O+')}</span>
                 </div>
                 <div class="detail-block">
                   <strong>Patient UID</strong>
@@ -420,68 +458,101 @@ export const EmergencyView: React.FC = () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 pt-2 bg-transparent">
-            {/* The Printed Card look */}
-            <div className="p-5 border border-slate-200 bg-white rounded-2xl relative overflow-hidden text-[10px] space-y-4 shadow-sm cursor-pointer hover:border-slate-350 transition-colors">
-              <div className="absolute top-0 right-0 w-24 h-24 bg-rose-50 rounded-full blur-xl pointer-events-none" />
-              
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900 tracking-tight">{currentPatientProfile.name.toUpperCase()}</h4>
-                  <span className="text-[8px] text-slate-400 font-semibold block mt-1 uppercase">
-                    ID: {currentPatientProfile.patientUid || 'PX-XXXXXX'} • Aadhaar: {currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'}
-                  </span>
+            {user?.role === 'doctor' && !breakGlassActive ? (
+              <div className="p-6 border border-rose-100 bg-rose-50/20 rounded-2xl text-center space-y-4 flex flex-col justify-center items-center min-h-[300px] shadow-inner">
+                <div className="w-12 h-12 rounded-full bg-rose-50 flex items-center justify-center text-rose-500 border border-rose-100 shadow-sm animate-pulse">
+                  <Lock size={20} />
                 </div>
-                <div className="p-1 bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <QrCode size={32} className="text-slate-800" />
-                </div>
-              </div>
-
-              {/* Parameters */}
-              <div className="grid grid-cols-2 gap-3.5 border-t border-slate-100 pt-3 text-slate-700">
-                <div>
-                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">BLOOD TYPE</span>
-                  <span className="text-slate-900 font-extrabold text-xs">A-POSITIVE (A+)</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">DRUG ALLERGIES</span>
-                  <span className="text-rose-600 font-bold text-[9px] truncate block" title={patientAllergies}>
-                    {patientAllergies}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">BELIEVED DOCTOR</span>
-                  <span className="text-slate-900 font-semibold text-[9px] truncate block" title={currentPatientProfile.preferredDoctorName || 'Not Set'}>
-                    {currentPatientProfile.preferredDoctorName || 'Not Set'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">PREFERRED CLINIC / HOSPITAL</span>
-                  <span className="text-slate-900 font-semibold text-[9px] truncate block" title={currentPatientProfile.preferredHospitalName || 'Not Set'}>
-                    {currentPatientProfile.preferredHospitalName || 'Not Set'}
-                  </span>
-                </div>
-                <div className="col-span-2">
-                  <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">ACTIVE MEDICATIONS</span>
-                  <span className="text-slate-900 text-[9px] block truncate font-semibold" title={patientMeds}>
-                    {patientMeds}
-                  </span>
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Emergency ID Card Encrypted</h4>
+                  <p className="text-[10px] text-slate-500 max-w-xs leading-normal">
+                    This emergency card contains critical clinical parameters (blood type, drug allergies, active regimens).
+                  </p>
+                  <p className="text-[10px] text-rose-600 font-semibold max-w-xs leading-normal bg-rose-50/50 p-2 rounded-lg border border-rose-100/50 mt-1">
+                    To decrypt and view this medical card, please initiate the Break-Glass Protocol on the left. All emergency overrides are logged to the HIPAA ledger.
+                  </p>
                 </div>
               </div>
+            ) : (
+              <>
+                {/* The Printed Card look */}
+                <div className="p-5 border border-slate-200 bg-white rounded-2xl relative overflow-hidden text-[10px] space-y-4 shadow-sm cursor-pointer hover:border-slate-350 transition-colors">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-rose-50 rounded-full blur-xl pointer-events-none" />
+                  
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900 tracking-tight">{currentPatientProfile.name.toUpperCase()}</h4>
+                      <span className="text-[8px] text-slate-400 font-semibold block mt-1 uppercase">
+                        ID: {currentPatientProfile.patientUid || 'PX-XXXXXX'} • Aadhaar: {currentPatientProfile.aadhaarId ? '••••-••••-' + currentPatientProfile.aadhaarId.slice(-4) : '••••-••••-XXXX'}
+                      </span>
+                    </div>
+                    <div className="p-1 bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <QrCode size={32} className="text-slate-800" />
+                    </div>
+                  </div>
 
-              <div className="flex items-center gap-1.5 text-[8px] text-slate-450 pt-2 border-t border-slate-100 font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>SECURED & REGISTERED HEALTH INFORMATION</span>
-              </div>
-            </div>
+                  {/* Parameters */}
+                  <div className="grid grid-cols-2 gap-3.5 border-t border-slate-100 pt-3 text-slate-700">
+                    <div>
+                      <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">BLOOD TYPE</span>
+                      <span className="text-slate-900 font-extrabold text-xs">
+                        {formatBloodGroupLongName(currentPatientProfile.bloodGroup || 'O+')}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">DRUG ALLERGIES</span>
+                      <span className="text-rose-600 font-bold text-[9px] truncate block" title={patientAllergies}>
+                        {patientAllergies}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">BELIEVED DOCTOR</span>
+                      <span className="text-slate-900 font-semibold text-[9px] truncate block" title={currentPatientProfile.preferredDoctorName || 'Not Set'}>
+                        {currentPatientProfile.preferredDoctorName || 'Not Set'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">PREFERRED CLINIC / HOSPITAL</span>
+                      <span className="text-slate-900 font-semibold text-[9px] truncate block" title={currentPatientProfile.preferredHospitalName || 'Not Set'}>
+                        {currentPatientProfile.preferredHospitalName || 'Not Set'}
+                      </span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="text-slate-400 font-bold block text-[8px] uppercase tracking-wider">ACTIVE MEDICATIONS</span>
+                      <span className="text-slate-900 text-[9px] block truncate font-semibold" title={patientMeds}>
+                        {patientMeds}
+                      </span>
+                    </div>
+                  </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full text-xs"
-              onClick={handleExportPDF}
-            >
-              Export Medical ID Card
-            </Button>
+                  <div className="flex items-center gap-1.5 text-[8px] text-slate-450 pt-2 border-t border-slate-100 font-semibold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>SECURED & REGISTERED HEALTH INFORMATION</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 text-xs"
+                    onClick={handleExportPDF}
+                  >
+                    Export Medical ID Card
+                  </Button>
+                  {user?.role === 'patient' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 text-xs"
+                      onClick={() => setIsEditOpen(true)}
+                    >
+                      Edit Card Details
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -676,6 +747,67 @@ export const EmergencyView: React.FC = () => {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit Card Details Modal */}
+      <Modal
+        isOpen={isEditOpen}
+        onClose={() => setIsEditOpen(false)}
+        title="Edit Emergency Card Details"
+        description="Fill in your believed doctor, primary hospital/clinic, and Aadhaar ID to display on your Emergency Medical ID card."
+      >
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Aadhaar ID</label>
+            <input
+              type="text"
+              placeholder="e.g., 2034-8841-2940"
+              value={editAadhaar}
+              onChange={(e) => setEditAadhaar(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Believed Doctor Name</label>
+            <input
+              type="text"
+              placeholder="e.g., Dr. S.P. MUDITY"
+              value={editDocName}
+              onChange={(e) => setEditDocName(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Primary Hospital / Clinic Name</label>
+            <input
+              type="text"
+              placeholder="e.g., JSS Hospital"
+              value={editHospitalName}
+              onChange={(e) => setEditHospitalName(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-medium"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsEditOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleSaveProfileDetails}
+              disabled={isSaving}
+            >
+              {isSaving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

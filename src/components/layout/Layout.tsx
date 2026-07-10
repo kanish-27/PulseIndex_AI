@@ -27,7 +27,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     activeEmergencyDoctor,
     deactivateBreakGlass,
     providers,
-    currentPatientProfile
+    currentPatientProfile,
+    activePatientName,
+    setActivePatientName,
+    mongoPatients
   } = useApp();
 
   if (!user) return <>{children}</>;
@@ -45,8 +48,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     ...(user.role === 'patient' ? [
       { id: 'consent', label: 'Consent Intelligence', icon: ShieldCheck, color: 'text-primary-600' }
     ] : []),
-    ...(user.role === 'patient' || user.role === 'doctor' ? [
+    ...(user.role === 'patient' ? [
       { id: 'guardian', label: 'Clinical Safety Copilot', icon: ShieldAlert, color: 'text-warning' },
+    ] : []),
+    ...(user.role === 'patient' || user.role === 'doctor' ? [
       { id: 'emergency', label: 'Emergency Access', icon: Flame, color: 'text-danger' }
     ] : []),
     { id: 'audit', label: 'Healthcare Trust Center', icon: History, color: 'text-primary-600' }
@@ -77,11 +82,27 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <span className="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse" />
             </div>
             
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <div className="text-[11px] text-slate-800 font-semibold truncate">{user.institution}</div>
-              <div className="text-[9px] text-slate-500 flex items-center gap-1 font-mono">
-                <span>Active Patient:</span>
-                <span className="text-slate-800 font-medium">{currentPatientProfile.name}</span>
+              <div className="space-y-1">
+                <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Active Patient:</label>
+                <select
+                  value={activePatientName}
+                  onChange={(e) => setActivePatientName(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary-500 font-sans cursor-pointer hover:border-slate-300 transition-colors"
+                >
+                  {mongoPatients.length === 0 ? (
+                    <option value="" disabled>No patients</option>
+                  ) : (
+                    mongoPatients
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .map(p => (
+                        <option key={p.email} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))
+                  )}
+                </select>
               </div>
             </div>
 

@@ -8,9 +8,17 @@ import { ConsentView } from './features/consent/ConsentView';
 import { EmergencyView } from './features/emergency/EmergencyView';
 import { AuditView } from './features/audit/AuditView';
 import { GuardianView } from './features/guardian/GuardianView';
+import { ShareLinkView } from './features/vault/ShareLinkView';
 
 const AppContent: React.FC = () => {
   const { user, activeTab } = useApp();
+
+  // Intercept the /share/ path at root level
+  const isShareLink = typeof window !== 'undefined' && window.location.pathname.startsWith('/share/');
+  if (isShareLink) {
+    const docId = window.location.pathname.split('/').pop() || '';
+    return <ShareLinkView docId={docId} />;
+  }
 
   // If user is not logged in, render the AuthPage
   if (!user) {

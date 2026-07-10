@@ -4,7 +4,7 @@ import { URL } from 'url';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+import pg from 'pg';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -17,6 +17,11 @@ try {
 
 const PORT = 3001;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+const apiCache = {
+  ocr: new Map(),
+  format: new Map()
+};
 
 if (!GROQ_API_KEY) {
   console.error('\n⚠️  WARNING: GROQ_API_KEY is not defined in the environment or .env file!\n');
@@ -78,7 +83,7 @@ You MUST respond in a strict JSON format with no markdown wrappers (like \`\`\`j
         }
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.1
+      temperature: 0.0
     });
 
     const options = {
@@ -132,9 +137,130 @@ You MUST respond in a strict JSON format with no markdown wrappers (like \`\`\`j
 // CORS headers configuration helper
 const setCorsHeaders = (res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 };
+
+// ─── MongoDB Setup ────────────────────────────────────────────────────────────
+import { MongoClient } from 'mongodb';
+const MONGO_URI = 'mongodb://localhost:27017/';
+const MONGO_DB  = 'mediguardai';
+let _mongoClient = null;
+let _mongoDb     = null;
+
+const getMongoDB = async () => {
+  if (_mongoDb) return _mongoDb;
+  _mongoClient = new MongoClient(MONGO_URI);
+  await _mongoClient.connect();
+  _mongoDb = _mongoClient.db(MONGO_DB);
+  console.log('✅ MongoDB connected to', MONGO_DB);
+  return _mongoDb;
+};
+
+// Initialise connection at startup (non-blocking)
+getMongoDB().catch(err => console.error('❌ MongoDB connection failed:', err.message));
+
+// Helper: read body as JSON
+const readBody = (req) => new Promise((resolve, reject) => {
+  let body = '';
+  req.on('data', c => { body += c.toString(); });
+  req.on('end', () => {
+    try { resolve(JSON.parse(body || '{}')); }
+    catch(e) { reject(new Error('Invalid JSON body')); }
+  });
+  req.on('error', reject);
+});
+
+// Helper: JSON response
+const sendJson = (res, status, data) => {
+  setCorsHeaders(res);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+};
+
+// ─── MongoDB REST API handler ─────────────────────────────────────────────────
+// Routes:
+//   GET    /api/mongo/:collection          → list all documents
+//   GET    /api/mongo/:collection/:id      → find one by { id }
+//   POST   /api/mongo/:collection          → upsert document (uses doc.id or doc.email as key)
+//   DELETE /api/mongo/:collection/:id      → delete by { id }
+
+const ALLOWED_COLLECTIONS = new Set([
+  'users', 'patient_profiles', 'health_records', 'medical_documents',
+  'provider_consents', 'pending_requests', 'blockchain_audit_logs',
+  'consent_signatures', 'consent_audit_logs', 'emergency_contacts'
+]);
+
+const handleMongoRequest = async (req, res, pathname) => {
+  // Match /api/mongo/<collection> or /api/mongo/<collection>/<id>
+  const parts = pathname.replace(/^\/api\/mongo\/?/, '').split('/');
+  const colName = parts[0];
+  const docId   = parts[1] ? decodeURIComponent(parts[1]) : null;
+
+  if (!ALLOWED_COLLECTIONS.has(colName)) {
+    return sendJson(res, 400, { error: `Unknown collection: ${colName}` });
+  }
+
+  try {
+    const db  = await getMongoDB();
+    const col = db.collection(colName);
+
+    // ── GET ──────────────────────────────────────────────────────────────────
+    if (req.method === 'GET') {
+      if (docId) {
+        const doc = await col.findOne({ id: docId });
+        return sendJson(res, 200, doc || null);
+      }
+      const docs = await col.find({}).toArray();
+      return sendJson(res, 200, docs);
+    }
+
+    // ── POST (upsert) ────────────────────────────────────────────────────────
+    if (req.method === 'POST') {
+      const data = await readBody(req);
+      data.updatedAt = new Date().toISOString();
+      if (!data.createdAt) data.createdAt = data.updatedAt;
+
+      // Strip _id to prevent immutable field update errors
+      if (data._id) {
+        delete data._id;
+      }
+
+      // Determine the natural key for upsert
+      const filterKey   = colName === 'users' ? 'email'
+                        : colName === 'patient_profiles' ? 'patient_name'
+                        : 'id';
+      const filterValue = data[filterKey];
+
+      if (!filterValue) {
+        return sendJson(res, 400, { error: `Missing required field: ${filterKey}` });
+      }
+
+      await col.updateOne(
+        { [filterKey]: filterValue },
+        { $set: data },
+        { upsert: true }
+      );
+      return sendJson(res, 200, { success: true });
+    }
+
+    // ── DELETE ───────────────────────────────────────────────────────────────
+    if (req.method === 'DELETE') {
+      if (!docId) return sendJson(res, 400, { error: 'Document ID required for DELETE' });
+      const filterKey = colName === 'users' ? 'email'
+                      : colName === 'patient_profiles' ? 'patient_name'
+                      : 'id';
+      await col.deleteOne({ [filterKey]: docId });
+      return sendJson(res, 200, { success: true });
+    }
+
+    sendJson(res, 405, { error: 'Method not allowed' });
+  } catch (err) {
+    console.error('MongoDB API error:', err.message);
+    sendJson(res, 500, { error: err.message });
+  }
+};
+
 
 const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
@@ -145,6 +271,12 @@ const server = http.createServer((req, res) => {
     setCorsHeaders(res);
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  // ── MongoDB CRUD API (/api/mongo/:collection[/:id]) ──────────────────────
+  if (pathname.startsWith('/api/mongo/')) {
+    handleMongoRequest(req, res, pathname);
     return;
   }
 
@@ -572,6 +704,16 @@ const server = http.createServer((req, res) => {
           return;
         }
 
+        const cacheKey = imageBase64.substring(0, 1000) + '_' + imageBase64.length;
+        if (apiCache.ocr.has(cacheKey)) {
+          console.log('Serving vision OCR response from local memory cache.');
+          const cachedResult = apiCache.ocr.get(cacheKey);
+          setCorsHeaders(res);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(cachedResult));
+          return;
+        }
+
         const mime = mimeType || 'image/jpeg';
         const postData = JSON.stringify({
           model: 'meta-llama/llama-4-scout-17b-16e-instruct',
@@ -585,44 +727,40 @@ const server = http.createServer((req, res) => {
                 },
                 {
                   type: 'text',
-                  text: `You are an expert medical document classifier and prescription OCR specialist.
-
-FIRST inspect the image and determine its document type. A prescription contains medication orders written or printed by a clinician, usually with drug names and dosage/frequency instructions. MRI/CT/X-ray images or reports, laboratory reports, discharge summaries, bills, insurance documents, and general medical records are NOT prescriptions.
-
+                  text: `You are an expert medical document classifier and high-fidelity clinical OCR specialist.
+ 
+FIRST inspect the image and determine its document type. Transcribe EXACTLY what is written and preserve its layout.
+ 
 CRITICAL RULES:
-1. If the document is NOT a prescription, do not transcribe any text and return an empty transcription.
-2. If it IS a prescription, transcribe EXACTLY what is written and preserve its structure.
-3. For handwritten prescription text, use your medical knowledge to interpret:
-   - Drug names (even if partially legible - infer from context)
+1. Transcribe the document text verbatim. Do not omit any medical terms, names, dates, or measurements.
+2. For handwritten prescription text, use your medical knowledge to interpret and correct:
+   - Drug names (e.g. resolve illegible characters based on standard pharmacological databases)
    - Dosage shorthand: QD/OD=once daily, BD/BID=twice daily, TDS/TID=3x daily, QID=4x daily
    - Timing: AC=before meals, PC=after meals, HS=at bedtime, SOS=if needed
-   - Rx = prescription, T./Tab. = Tablet, Cap. = Capsule, Inj. = Injection, Syr. = Syrup
-   - Numbers like 1+0+1 (morning+afternoon+night), 0+0+1 (night only)
-   - mg, mcg, ml, IU, units
-4. Preserve the original prescription layout:
-   - Header: Hospital/clinic name, address, doctor credentials
-   - Patient info: Name, age/sex, date, ID/OPD number
-   - Diagnosis/Chief Complaints (if present)
-   - Rx section: All medications with dosage, frequency, duration
-   - Investigations ordered (X-ray, MRI, blood tests etc.)
-   - Advice/instructions
-   - Follow-up date
-   - Signature/stamp
-
-5. If prescription text is unclear, make your best medical inference and put [?] after uncertain words.
-6. Return ONLY valid JSON using this schema:
+   - Rx = prescription, T./Tab. = Tablet, Cap. = Capsule, Inj. = Injection, Syr. = Syrup, Susp. = Suspension
+   - Dosage frequencies written as numbers like 1+0+1 (morning+afternoon+night), 0+0+1 (night only)
+   - Standard units: mg, mcg, ml, IU, units
+3. Preserve the original layout structure:
+   - Header: Hospital/clinic name, address, doctor credentials and qualifications
+   - Patient details: Name, age, gender, date, ID number
+   - Clinical details: Diagnosis, symptoms, vitals
+   - Rx Section: Complete list of medications with dosage, frequency, and duration
+   - Laboratory / test measurements, reference values, and investigations ordered
+   - Doctor signature / stamp
+4. Return ONLY valid JSON using this schema:
 {
   "isPrescription": true or false,
   "documentType": "prescription" | "laboratory_report" | "mri_scan" | "ct_scan" | "xray" | "insurance" | "medical_record" | "unknown",
   "confidence": number from 0 to 100,
-  "transcription": "full prescription text, or an empty string for every non-prescription"
+  "transcription": "full transcribed text from the document"
 }`
                 }
               ]
             }
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.05,
+          temperature: 0.0,
+          seed: 42,
           max_tokens: 2048
         });
 
@@ -646,13 +784,13 @@ CRITICAL RULES:
             res2.on('end', () => {
               if (res2.statusCode >= 200 && res2.statusCode < 300) {
                 try {
-                  const parsed = JSON.parse(data);
-                  const content = parsed.choices[0].message.content;
-                  const classification = JSON.parse(cleanJsonContent(content));
-                  if (typeof classification.isPrescription !== 'boolean' || !classification.documentType) {
-                    throw new Error('Vision model returned an invalid document classification');
-                  }
-                  resolve(classification);
+                   const parsed = JSON.parse(data);
+                   const content = parsed.choices[0].message.content;
+                   const classification = JSON.parse(cleanJsonContent(content));
+                   if (typeof classification.isPrescription !== 'boolean' || !classification.documentType) {
+                     throw new Error('Vision model returned an invalid document classification');
+                   }
+                   resolve(classification);
                 } catch (e) {
                   reject(new Error('Failed to parse OCR response: ' + e.message));
                 }
@@ -672,14 +810,20 @@ CRITICAL RULES:
           ocrResult.documentType,
           `(${ocrResult.confidence || 0}% confidence)`
         );
-        setCorsHeaders(res);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+
+        const responsePayload = {
           isPrescription: ocrResult.isPrescription,
           documentType: ocrResult.documentType,
           confidence: ocrResult.confidence,
-          text: ocrResult.isPrescription ? (ocrResult.transcription || '') : ''
-        }));
+          text: ocrResult.transcription || ''
+        };
+
+        // Cache the result
+        apiCache.ocr.set(cacheKey, responsePayload);
+
+        setCorsHeaders(res);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(responsePayload));
       } catch (err) {
         console.error('OCR error:', err.message);
         setCorsHeaders(res);
@@ -703,49 +847,65 @@ CRITICAL RULES:
           res.end(JSON.stringify({ error: 'Missing rawText field' }));
           return;
         }
+
+        const cacheKey = rawText.trim();
+        if (apiCache.format.has(cacheKey)) {
+          console.log('Serving structured text formatting from local memory cache.');
+          const cachedResult = apiCache.format.get(cacheKey);
+          setCorsHeaders(res);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ structured: cachedResult }));
+          return;
+        }
+
         const postData = JSON.stringify({
           model: 'llama-3.3-70b-versatile',
           messages: [
             {
               role: 'system',
-              content: `You are a medical data structuring assistant. Given raw OCR text from a doctor's prescription (may include English and Tamil/regional language), extract and return ONLY valid JSON with NO markdown, NO code fences, NO extra text. Use this exact schema:
-{"clinic":"clinic/hospital name English only","clinicAddress":"address","clinicPhone":"phone or empty","doctor":"doctor full name with qualifications","doctorReg":"reg number or empty","patientName":"name","patientAge":"age/gender","date":"date","diagnosis":["array"],"vitals":[{"label":"string","value":"string"}],"medications":[{"number":1,"name":"drug name","dose":"dosage","frequency":"timing expanded","duration":"or empty"}],"advice":["array"],"investigations":["array"],"followUp":"or empty","notes":"other notes translated to English"}
-Rules: translate Tamil to English, expand OD=once daily BD=twice daily TDS=thrice daily AC=before meals PC=after meals HS=at bedtime, empty string for missing fields.`
+              content: `You are a medical data structuring assistant. Given raw OCR text from a doctor's prescription, laboratory report, blood test, or medical scan document, extract and return ONLY valid JSON with NO markdown, NO code fences, NO extra text. Use this exact schema:
+{"clinic":"clinic/hospital/laboratory name English only","clinicAddress":"address","clinicPhone":"phone or empty","doctor":"doctor or laboratory specialist full name with qualifications","doctorReg":"reg number or empty","patientName":"patient name","patientAge":"patient age and gender (e.g. 31/F, 66/M, 45 Years/Male)","date":"report or prescription date (e.g. 21/05/2026, 22/12/2022, 10 Jul 2026)","diagnosis":["array of findings, diagnoses, or test results"],"vitals":[{"label":"Test Name/Measurement (e.g. Haemoglobin, Total WBC count, NEUTROPHILS)","value":"Result Value + Unit (e.g. 12.3 g/dL, 7640 cells/cumm, 55.30 %)"}],"medications":[{"number":1,"name":"drug name","dose":"dosage","frequency":"timing expanded","duration":"or empty"}],"advice":["array of patient advice or laboratory remarks"],"investigations":["array of overall panel or profile names (e.g., 'Complete blood count')"],"followUp":"or empty","notes":"other test notes or comments translated to English"}
+Rules: Extract patientName, patientAge, and date directly from the document contents. For the patientAge field, be extremely careful: do NOT confuse the year of a date (such as '19' from '31-08-2019') with the patient's age. The patient's actual age is usually explicitly labeled (e.g. if the report says 'Age: 49 years', the age is 49 yrs). Always prefer the explicit age label from the document. For the date field, search for keys like 'Collected Date', 'Reported Date', 'Received Date', 'Date of Report', 'Date of Collection', or any general date in the document headers, and return it. Do NOT leave the date field empty or '—' if a date exists anywhere in the document. For laboratory tests/blood tests, make sure to extract each individual test parameter (e.g. Haemoglobin, Platelet count, etc.) with its exact numerical result value and unit into the vitals array (e.g. {"label": "Haemoglobin", "value": "12.3 g/dL"}). For imaging scan reports (such as MRI, CT Scan, X-Ray, Ultrasound, ECG, scan films, etc.), do NOT extract anatomical measurements, disc heights, dimensions, or normal spinal findings into the vitals array (keep vitals empty). Instead, extract only the definitive diagnoses or main key findings (such as fractures, bulges, compression, myelopathy, herniation, etc.) into the diagnosis array. Put the overall panel names (like "Complete blood count" or "MRI Scan") in the investigations array. Translate Tamil to English, expand OD=once daily BD=twice daily TDS=thrice daily AC=before meals PC=after meals HS=at bedtime, empty string for missing fields.`
             },
-            { role: 'user', content: `Structure this prescription:\n\n${rawText}` }
+            { role: 'user', content: `Structure this medical document:\n\n${rawText}` }
           ],
-          response_format: { type: 'json_object' },
-          temperature: 0.05
-        });
-        const options = {
-          hostname: 'api.groq.com', port: 443,
-          path: '/openai/v1/chat/completions', method: 'POST',
-          headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
-          timeout: 20000
-        };
-        const structured = await new Promise((resolve, reject) => {
-          const r = https.request(options, (res2) => {
-            let data = '';
-            res2.on('data', c => { data += c; });
-            res2.on('end', () => {
-              if (res2.statusCode >= 200 && res2.statusCode < 300) {
-                try {
-                  const p = JSON.parse(data);
-                  const content = p.choices[0].message.content;
-                  resolve(JSON.parse(cleanJsonContent(content)));
-                }
-                catch (e) { reject(new Error('Parse error: ' + e.message)); }
-              } else { reject(new Error('API error ' + res2.statusCode)); }
-            });
-          });
-          r.on('error', reject);
-          r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
-          r.write(postData); r.end();
-        });
-        console.log('Prescription formatting completed. Structured data:', JSON.stringify(structured).substring(0, 300));
-        setCorsHeaders(res);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ structured }));
+           response_format: { type: 'json_object' },
+           temperature: 0.0,
+           seed: 42
+         });
+         const options = {
+           hostname: 'api.groq.com', port: 443,
+           path: '/openai/v1/chat/completions', method: 'POST',
+           headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+           timeout: 20000
+         };
+         const structured = await new Promise((resolve, reject) => {
+           const r = https.request(options, (res2) => {
+             let data = '';
+             res2.on('data', c => { data += c; });
+             res2.on('end', () => {
+               if (res2.statusCode >= 200 && res2.statusCode < 300) {
+                 try {
+                   const p = JSON.parse(data);
+                   const content = p.choices[0].message.content;
+                   resolve(JSON.parse(cleanJsonContent(content)));
+                 }
+                 catch (e) { reject(new Error('Parse error: ' + e.message)); }
+               } else { reject(new Error('API error ' + res2.statusCode)); }
+             });
+           });
+           r.on('error', reject);
+           r.on('timeout', () => { r.destroy(); reject(new Error('Timeout')); });
+           r.write(postData); r.end();
+         });
+         
+         // Cache the structured result
+         apiCache.format.set(cacheKey, structured);
+
+         console.log('Prescription formatting completed. Structured data:', JSON.stringify(structured).substring(0, 300));
+         setCorsHeaders(res);
+         res.writeHead(200, { 'Content-Type': 'application/json' });
+         res.end(JSON.stringify({ structured }));
       } catch (err) {
         console.error('Format error:', err.message);
         setCorsHeaders(res);
@@ -781,7 +941,7 @@ Important: Always provide accurate Tamil translations for every _ta field. Keep 
             { role: 'user', content: `Give bilingual (English + Tamil) patient-friendly information about this medicine: ${medicineName}` }
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.1
+          temperature: 0.0
         });
         const options = {
           hostname: 'api.groq.com', port: 443,
@@ -818,6 +978,116 @@ Important: Always provide accurate Tamil translations for every _ta field. Keep 
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Failed to fetch medicine info', details: err.message }));
       }
+    });
+    return;
+  }
+  // POST /api/deploy-schema — deploy PostgreSQL relational tables to Supabase
+  if (pathname === '/api/deploy-schema' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      let connStr = '';
+      let password = '';
+      try {
+        connStr = process.env.SUPABASE_DB_CONNECTION_STRING || '';
+        
+        if (body.trim()) {
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed.password) password = parsed.password;
+          } catch (e) {}
+        }
+        
+        if (!password && process.env.VITE_SUPABASE_ANON_KEY && process.env.VITE_SUPABASE_ANON_KEY !== 'YOUR_SUPABASE_ANON_KEY') {
+          password = process.env.VITE_SUPABASE_ANON_KEY;
+        }
+
+        if (connStr.includes('YOUR_DB_PASSWORD') && password) {
+          const encoded = encodeURIComponent(password);
+          connStr = connStr.replace('YOUR_DB_PASSWORD', encoded);
+        }
+
+        if (!connStr || connStr.includes('YOUR_DB_PASSWORD')) {
+          setCorsHeaders(res);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Database password not configured in .env' }));
+          return;
+        }
+
+        const { Client } = pg;
+        const client = new Client({
+          connectionString: connStr,
+          ssl: { rejectUnauthorized: false }
+        });
+
+        await client.connect();
+        const schemaPath = path.join(__dirname, 'src/services/database/supabase_schema.sql');
+        const sql = fs.readFileSync(schemaPath, 'utf8');
+        await client.query(sql);
+        await client.end();
+
+        console.log('Supabase relational tables and policies deployed successfully via backend!');
+        setCorsHeaders(res);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: 'Schema tables and policies deployed successfully' }));
+      } catch (err) {
+        console.error('Failed to deploy schema via backend. Connection string (masked):', connStr.replace(password, '****'));
+        console.error('Full Error:', err);
+        setCorsHeaders(res);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to deploy schema', details: err ? (err.message || String(err)) : 'Unknown error' }));
+      }
+    });
+    return;
+  }
+  // GET /api/find-pooler — Scan all Supabase pooler regions to find the correct project region
+  if (pathname === '/api/find-pooler' && req.method === 'GET') {
+    const regions = [
+      'ap-south-1', 'us-west-1', 'us-east-1', 'eu-central-1', 'ap-southeast-1',
+      'us-west-2', 'us-east-2', 'ca-central-1', 'eu-west-1', 'eu-west-2',
+      'eu-west-3', 'ap-northeast-1', 'ap-northeast-2', 'ap-southeast-2', 'sa-east-1'
+    ];
+    const password = 'Kanish@1237689';
+    const projectRef = 'gueiqnmwrezlssstnrxl';
+
+    const tryConnect = (region) => {
+      return new Promise((resolve) => {
+        const host = `aws-0-${region}.pooler.supabase.com`;
+        const { Client } = pg;
+        const client = new Client({
+          host,
+          port: 6543,
+          database: 'postgres',
+          user: `postgres.${projectRef}`,
+          password: password,
+          ssl: { rejectUnauthorized: false },
+          connectionTimeoutMillis: 3000
+        });
+
+        client.connect((err) => {
+          if (err) {
+            if (err.message.includes('password authentication failed') || err.message.includes('database') || err.message.includes('relation') || err.message.includes('secret') || err.message.includes('PAM')) {
+              resolve({ region, host, success: true, err: err.message });
+            } else {
+              resolve({ region, success: false, err: err.message });
+            }
+          } else {
+            client.end();
+            resolve({ region, host, success: true });
+          }
+        });
+      });
+    };
+
+    Promise.all(regions.map(r => tryConnect(r))).then(results => {
+      const found = results.find(r => r.success);
+      setCorsHeaders(res);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ found: found || null, results }));
+    }).catch(err => {
+      setCorsHeaders(res);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
     });
     return;
   }

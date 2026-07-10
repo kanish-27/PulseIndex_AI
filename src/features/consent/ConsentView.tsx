@@ -20,6 +20,7 @@ export const ConsentView: React.FC = () => {
     togglePermission, 
     toggleDataCategory, 
     updateConsentExpiry,
+    terminateProviderAccess,
     pendingRequests,
     approveAccessRequest,
     rejectAccessRequest
@@ -268,6 +269,22 @@ export const ConsentView: React.FC = () => {
                           );
                         })}
                       </div>
+                    </div>
+
+                    {/* Revoke / Terminate Access */}
+                    <div className="pt-3 border-t border-slate-200">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 hover:border-rose-300 transition-colors"
+                        onClick={() => {
+                          if (window.confirm(`Are you sure you want to terminate all access rights and revoke consent for ${p.name}?`)) {
+                            terminateProviderAccess(p.id);
+                          }
+                        }}
+                      >
+                        Terminate Access & Revoke Consent
+                      </Button>
                     </div>
                   </div>
                 )}

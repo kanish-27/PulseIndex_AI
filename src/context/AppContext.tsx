@@ -9,29 +9,94 @@ import {
   deleteFile
 } from '../services/firebase/storageService';
 import {
-  saveUser,
-  subscribeToUsers,
-  savePatientProfile,
-  subscribeToPatientProfiles,
-  saveHealthRecord,
-  deleteDocById,
-  subscribeToHealthRecords,
-  saveConsentSignature,
-  subscribeToConsentSignatures,
-  saveConsentAuditLog,
-  subscribeToConsentAuditLogs,
-  saveProviderConsent,
-  subscribeToProviderConsents,
-  saveAccessRequest,
-  deleteAccessRequest,
-  subscribeToAccessRequests,
-  saveEmergencyContact,
-  subscribeToEmergencyContacts,
-  saveBlockchainAuditLog,
-  subscribeToBlockchainAuditLogs,
   updateDocFields,
-  readDoc
+  readDoc,
+  subscribeToUsers,
+  subscribeToPatientProfiles,
+  subscribeToHealthRecords,
+  subscribeToConsentSignatures,
+  subscribeToConsentAuditLogs,
+  subscribeToProviderConsents,
+  subscribeToAccessRequests,
+  subscribeToEmergencyContacts,
+  subscribeToBlockchainAuditLogs,
+  subscribeToMedicalDocuments,
+  deleteDocById
 } from '../services/firebase/firestoreService';
+import { storageManager } from '../services/storage/StorageManager';
+import { storeFile, deleteFileFromDB } from '../utils/indexedDB';
+import {
+  mongoSaveUser,
+  mongoSavePatientProfile,
+  mongoSaveHealthRecord,
+  mongoDeleteHealthRecord,
+  mongoSaveProviderConsent,
+  mongoDeleteProviderConsent,
+  mongoSaveConsentSignature,
+  mongoSaveConsentAuditLog,
+  mongoSaveEmergencyContact,
+  mongoDeleteEmergencyContact,
+  mongoSaveBlockchainAuditLog,
+  mongoSaveAccessRequest,
+  mongoDeleteAccessRequest,
+  mongoSaveMedicalDocument,
+  mongoDeleteMedicalDocument,
+  mongoGetUsers,
+  mongoGetPatientProfiles,
+  mongoGetHealthRecords,
+  mongoGetMedicalDocuments,
+  mongoGetProviderConsents,
+  mongoGetAccessRequests,
+  mongoGetBlockchainAuditLogs,
+  mongoGetConsentSignatures,
+  mongoGetConsentAuditLogs,
+  mongoGetEmergencyContacts
+} from '../services/mongodb/mongoService';
+
+// ── MongoDB-backed data wrappers (primary store) ─────────────────────────────
+const saveUser = async (user: RegisteredUser): Promise<any> => {
+  return mongoSaveUser(user as object);
+};
+
+const savePatientProfile = async (name: string, profile: PatientProfile): Promise<any> => {
+  return mongoSavePatientProfile(name, { ...profile, patient_name: name });
+};
+
+const saveHealthRecord = async (record: HealthRecord): Promise<any> => {
+  return mongoSaveHealthRecord(record as object);
+};
+
+const saveProviderConsent = async (provider: ProviderConsent): Promise<any> => {
+  return mongoSaveProviderConsent(provider as object);
+};
+
+const saveConsentSignature = async (signature: ConsentSignature): Promise<any> => {
+  return mongoSaveConsentSignature(signature as object);
+};
+
+const saveConsentAuditLog = async (log: ConsentAuditLog): Promise<any> => {
+  return mongoSaveConsentAuditLog(log as object);
+};
+
+const saveEmergencyContact = async (contact: EmergencyContact): Promise<any> => {
+  return mongoSaveEmergencyContact(contact as object);
+};
+
+const saveBlockchainAuditLog = async (log: AuditLog): Promise<any> => {
+  return mongoSaveBlockchainAuditLog(log as object);
+};
+
+const saveAccessRequest = async (request: AccessRequest): Promise<any> => {
+  return mongoSaveAccessRequest(request as object);
+};
+
+const deleteAccessRequest = async (id: string): Promise<any> => {
+  return mongoDeleteAccessRequest(id);
+};
+
+const saveMedicalDocument = async (doc: MedicalDocument): Promise<any> => {
+  return mongoSaveMedicalDocument(doc as object);
+};
 
 // Interfaces for MediGuard AI state
 export interface RecordAccessEvent {
@@ -54,6 +119,7 @@ export interface PatientProfile {
   aadhaarId: string;
   preferredDoctorName?: string;
   preferredHospitalName?: string;
+  bloodGroup?: string;
   riskIndicators: {
     cardiovascular: number;
     metabolic: number;
@@ -138,6 +204,25 @@ export interface EmergencyContact {
   owner?: string;
 }
 
+export interface MedicalDocument {
+  id: string;
+  patient_id: string;
+  category: 'Prescription' | 'Lab Report' | 'Blood Test' | 'Discharge Summary' | 'MRI Scan' | 'CT Scan' | 'X-Ray' | 'Ultrasound' | 'ECG Images' | 'Medical Scan Reports' | 'Insurance Documents' | 'Other Reference Documents';
+  document_name: string;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  hospital_name: string;
+  doctor_name: string;
+  upload_date: string;
+  storage_url: string;
+  thumbnail_url?: string;
+  processing_mode: 'STRUCTURED' | 'ORIGINAL';
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface RegisteredUser {
   name: string;
   email: string;
@@ -148,6 +233,7 @@ export interface RegisteredUser {
   logoText?: string;
   providerType?: 'Hospital' | 'Laboratory' | 'Pharmacy' | 'Insurance';
   aadhaarId?: string;
+  bloodGroup?: string;
 }
 
 export interface ConsentSignature {
@@ -194,6 +280,7 @@ interface AppContextType {
   logout: () => void;
   requestAccess: (permission: 'read' | 'write') => void;
   registeredUsers: RegisteredUser[];
+  mongoPatients: RegisteredUser[];
   registerUser: (user: RegisteredUser) => void;
   resetApplication: () => void;
   
@@ -208,13 +295,14 @@ interface AppContextType {
   records: HealthRecord[];
   addRecord: (name: string, category: HealthRecord['category'], size: string, clinicalFindings?: string, file?: File) => Promise<string>;
   deleteRecord: (recordId: string) => Promise<void>;
-  uploadingFile: { name: string; step: 'hashing' | 'encrypting' | 'classifying' | 'ledgering' | 'done' | null };
+  uploadingFile: { name: string; step: string } | null;
   
   // Consent
   providers: ProviderConsent[];
   togglePermission: (providerId: string, permission: 'read' | 'write' | 'emergency') => void;
   toggleDataCategory: (providerId: string, category: keyof ProviderConsent['dataCategories']) => void;
   updateConsentExpiry: (providerId: string, expiry: string) => void;
+  terminateProviderAccess: (providerId: string) => Promise<void>;
   pendingRequests: AccessRequest[];
   approveAccessRequest: (id: string) => void;
   rejectAccessRequest: (id: string) => void;
@@ -234,6 +322,19 @@ interface AppContextType {
   emergencyContacts: EmergencyContact[];
   addEmergencyContact: (name: string, relation: string, phone: string) => void;
   deleteEmergencyContact: (contactId: string) => void;
+  medicalDocuments: MedicalDocument[];
+  addMedicalDocument: (docData: {
+    category: MedicalDocument['category'];
+    document_name: string;
+    original_filename: string;
+    mime_type: string;
+    file_size: number;
+    hospital_name: string;
+    doctor_name: string;
+    upload_date: string;
+    processing_mode: 'STRUCTURED' | 'ORIGINAL';
+  }, file?: File, clinicalFindings?: string) => Promise<string>;
+  deleteMedicalDocument: (docId: string) => Promise<void>;
   
   // AI Insights / Rewards
   optInResearch: boolean;
@@ -341,6 +442,9 @@ const synthesizePatientProfile = (name: string, aadhaarId?: string): PatientProf
   const mockImmuno = mockAllergies === 'None' ? 5 : 65 + (nameHash % 25);
   const mockOverall = Math.round(100 - (mockCardio + mockMetabolic + mockImmuno) / 6);
   
+  const bloodOptions = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+  const mockBloodGroup = bloodOptions[nameHash % bloodOptions.length];
+
   return {
     name,
     age: mockAge,
@@ -352,6 +456,7 @@ const synthesizePatientProfile = (name: string, aadhaarId?: string): PatientProf
     aadhaarId: finalAadhaar,
     preferredDoctorName: '',
     preferredHospitalName: '',
+    bloodGroup: mockBloodGroup,
     riskIndicators: {
       cardiovascular: mockCardio,
       metabolic: mockMetabolic,
@@ -399,7 +504,8 @@ const defaultPatientProfiles: Record<string, PatientProfile> = {
   },
   'Kanish': {
     ...synthesizePatientProfile('Kanish', '2034-8841-2940'),
-    patientUid: 'PX-KA7761'
+    patientUid: 'PX-KA7761',
+    bloodGroup: 'B+'
   },
   'Alice Smith': {
     ...synthesizePatientProfile('Alice Smith', '3942-0194-5510'),
@@ -556,7 +662,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Cache-bust: clear stale registered users when role data might be corrupted
   const [registeredUsers, setRegisteredUsers] = useState<RegisteredUser[]>(() => {
-    const USERS_VERSION = 'v3_user_passwords';
+    const USERS_VERSION = 'v4_dedup_by_name';
     const storedVersion = typeof window !== 'undefined' ? localStorage.getItem('mediguard_users_version') : null;
     if (storedVersion !== USERS_VERSION) {
       // Clear old users so seeded defaults (with correct roles) are used
@@ -566,15 +672,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return defaultRegisteredUsers;
     }
-    const stored = loadLocalData('mediguard_registered_users', defaultRegisteredUsers);
+    const stored = loadLocalData('mediguard_registered_users', defaultRegisteredUsers) as RegisteredUser[];
     // Ensure seeded demo accounts always have correct roles regardless of stored data
-    const corrected = stored.map((u: RegisteredUser) => {
+    const corrected: RegisteredUser[] = stored.map((u: RegisteredUser) => {
       if (u.email === 'doctor@sutterhealth.org') return { ...u, role: 'doctor', institution: 'Sutter Health', providerId: 'prov_sutter', logoText: 'SH', providerType: 'Hospital' };
       if (u.email === 'lab@questdiagnostics.com') return { ...u, role: 'laboratory', institution: 'Quest Diagnostics', providerId: 'prov_2', logoText: 'QD', providerType: 'Laboratory' };
       if (u.email === 'patient@mediguard.ai') return { ...u, role: 'patient' };
       return u;
     });
-    return corrected;
+    // Deduplicate by email — keep the last registration per unique email
+    const dedupedByEmail: RegisteredUser[] = Array.from(
+      corrected.reduce((map: Map<string, RegisteredUser>, u: RegisteredUser) => {
+        map.set(u.email.toLowerCase(), u);
+        return map;
+      }, new Map<string, RegisteredUser>()).values()
+    );
+    // Also deduplicate patients by name — same patient name = same person
+    const seenNames = new Set<string>();
+    const deduped: RegisteredUser[] = dedupedByEmail.filter((u: RegisteredUser) => {
+      if (u.role !== 'patient') return true; // keep all non-patients
+      const key = u.name.trim().toLowerCase();
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
+    });
+    return deduped;
   });
   
   // Cache-bust: clear stale patient profiles when data format changes
@@ -589,11 +711,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return defaultPatientProfiles;
     }
-    return loadLocalData('mediguard_patient_profiles', defaultPatientProfiles);
+    const loaded = loadLocalData('mediguard_patient_profiles', defaultPatientProfiles);
+    if (loaded && loaded['Kanish'] && loaded['Kanish'].bloodGroup !== 'B+') {
+      loaded['Kanish'].bloodGroup = 'B+';
+      saveLocalData('mediguard_patient_profiles', loaded);
+    }
+    return loaded;
   });
   const [activePatientName, setActivePatientName] = useState<string>('Jonathan Vance');
 
-  const [uploadingFile, setUploadingFile] = useState<{ name: string; step: 'hashing' | 'encrypting' | 'classifying' | 'ledgering' | 'done' | null }>({ name: '', step: null });
+  const [uploadingFile, setUploadingFile] = useState<{ name: string; step: string } | null>(null);
   const [isVerifyingLedger, setIsVerifyingLedger] = useState(false);
   const [ledgerIntegrity, setLedgerIntegrity] = useState<'verified' | 'unverified' | 'tampered'>('verified');
   const [breakGlassActive, setBreakGlassActive] = useState(false);
@@ -621,6 +748,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Emergency contacts
   const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>(() => loadLocalData('mediguard_emergency_contacts', defaultEmergencyContacts));
 
+  // Medical Documents
+  const [medicalDocuments, setMedicalDocuments] = useState<MedicalDocument[]>(() => loadLocalData('mediguard_medical_documents', []));
+
+  // MongoDB-sourced patient list (doctor panel dropdown — only real DB patients)
+  const [mongoPatients, setMongoPatients] = useState<RegisteredUser[]>([]);
+
+  // Fetch patients from MongoDB on mount and refresh after any registration
+  const fetchMongoPatients = async () => {
+    try {
+      const res = await fetch('http://localhost:3001/api/mongo/users');
+      if (!res.ok) return;
+      const all: any[] = await res.json();
+      const patients = all
+        .filter((u: any) => u.role === 'patient')
+        .map((u: any) => ({
+          name: u.name,
+          email: u.email,
+          role: u.role as 'patient',
+          aadhaarId: u.aadhaarId || u.aadhaar_id || '',
+          institution: u.institution,
+          providerId: u.providerId,
+          logoText: u.logoText
+        } as RegisteredUser));
+      // Deduplicate by name
+      const seen = new Set<string>();
+      const unique = patients.filter((p: RegisteredUser) => {
+        const key = p.name.trim().toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      setMongoPatients(unique);
+      if (unique.length > 0) {
+        setActivePatientName(prev => {
+          const exists = unique.some(p => p.name === prev);
+          if (!exists || prev === 'Jonathan Vance') {
+            return unique[0].name;
+          }
+          return prev;
+        });
+      }
+    } catch (e) {
+      console.warn('Could not fetch patients from MongoDB:', e);
+    }
+  };
+
+  useEffect(() => { fetchMongoPatients(); }, []);
+
   // Local state persistence watchers to localStorage
   useEffect(() => {
     saveLocalData('mediguard_active_user', user);
@@ -637,6 +812,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     saveLocalData('mediguard_records', records);
   }, [records]);
+
+  useEffect(() => {
+    saveLocalData('mediguard_medical_documents', medicalDocuments);
+  }, [medicalDocuments]);
 
   useEffect(() => {
     saveLocalData('mediguard_providers', providers);
@@ -1008,167 +1187,166 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [records, activePatientName, user, patientProfiles]);
 
-  // Real-time synchronization
+  // Real-time synchronization & initialization from MongoDB
   useEffect(() => {
-    let unsubs: (() => void)[] = [];
-
-    const unsubscribeAll = () => {
-      unsubs.forEach(unsub => {
-        try {
-          unsub();
-        } catch (e) {
-          console.warn('Error during subscription cleanup:', e);
-        }
-      });
-      unsubs = [];
-    };
-
     // 1. Auth Listener (always active)
     const unsubAuth = onAuthStateChangedListener(async (firebaseUser) => {
       if (firebaseUser) {
-        // Stop any previous subscriptions first
-        unsubscribeAll();
-
         const emailLower = firebaseUser.email!.toLowerCase();
-        const res = await readDoc('users', emailLower);
-        const userData = res.data as RegisteredUser;
 
-        // Retrieve registered or stored password to prevent listener overwrite erasure
-        const foundRegUser = registeredUsers.find(u => u.email.toLowerCase() === emailLower);
-        const storedUser = loadLocalData('mediguard_active_user', null);
-        const preservedPassword = foundRegUser?.password || (storedUser && storedUser.email.toLowerCase() === emailLower ? storedUser.password : undefined);
-
-        // Helper: apply hardcoded role overrides for seeded demo accounts
-        // so Firestore permission failures can never corrupt the role
-        const applyDemoOverrides = (base: {
-          name: string; email: string; password?: string; mfaEnabled: boolean;
-          role: 'patient' | 'doctor' | 'laboratory';
-          institution?: string; providerId?: string;
-          logoText?: string; providerType?: 'Hospital' | 'Laboratory' | 'Pharmacy' | 'Insurance';
-        }) => {
-          if (emailLower === 'doctor@sutterhealth.org')
-            return { ...base, role: 'doctor' as const, name: 'Dr. Sarah Connor, MD', institution: 'Sutter Health', providerId: 'prov_sutter', logoText: 'SH', providerType: 'Hospital' as const };
-          if (emailLower === 'lab@questdiagnostics.com')
-            return { ...base, role: 'laboratory' as const, name: 'Quest Lab Technician #49', institution: 'Quest Diagnostics', providerId: 'prov_2', logoText: 'QD', providerType: 'Laboratory' as const };
-          if (emailLower === 'patient@mediguard.ai')
-            return { ...base, role: 'patient' as const, name: 'Jonathan Vance' };
-          return base;
-        };
-
-        if (res.success && userData) {
-          setUser(applyDemoOverrides({
-            name: userData.name,
-            email: userData.email,
-            password: preservedPassword || userData.password,
-            mfaEnabled: true,
-            role: userData.role,
-            institution: userData.institution,
-            providerId: userData.providerId,
-            logoText: userData.logoText,
-            providerType: userData.providerType
+        // Load everything from MongoDB
+        try {
+          const dbUsers = await mongoGetUsers<any>();
+          
+          // Deduplicate by email and name
+          const corrected = dbUsers.map((u: any) => ({
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            institution: u.institution,
+            providerId: u.providerId,
+            logoText: u.logoText,
+            providerType: u.providerType,
+            aadhaarId: u.aadhaarId || u.aadhaar_id,
+            password: u.password
           }));
-        } else {
-          // Firestore read failed (permissions) — derive from email but apply demo overrides
-          setUser(applyDemoOverrides({
-            name: deriveNameFromEmail(firebaseUser.email!),
-            email: firebaseUser.email!,
-            password: preservedPassword,
-            mfaEnabled: true,
-            role: 'patient' // will be corrected by applyDemoOverrides for known accounts
-          }));
-        }
+          
+          const dedupedByEmail = Array.from(
+            corrected.reduce((map: Map<string, RegisteredUser>, u: RegisteredUser) => {
+              map.set(u.email.toLowerCase(), u);
+              return map;
+            }, new Map<string, RegisteredUser>()).values()
+          );
 
-        // Setup Firestore subscriptions now that the user is authenticated
-        
-        // 2. Users subscription + seeding
-        const unsubUsers = subscribeToUsers((usersList) => {
-          if (usersList.length === 0) {
-            registeredUsers.forEach(u => saveUser(u));
-          } else {
-            setRegisteredUsers(usersList);
-          }
-        });
-        unsubs.push(unsubUsers);
+          const seenNames = new Set<string>();
+          const deduped = dedupedByEmail.filter((u: RegisteredUser) => {
+            if (u.role !== 'patient') return true;
+            const key = u.name.trim().toLowerCase();
+            if (seenNames.has(key)) return false;
+            seenNames.add(key);
+            return true;
+          });
 
-        // 3. Profiles subscription + seeding
-        const unsubProfiles = subscribeToPatientProfiles((profilesMap) => {
-          if (Object.keys(profilesMap).length === 0) {
-            Object.entries(patientProfiles).forEach(([name, prof]) => savePatientProfile(name, prof));
-          } else {
-            setPatientProfiles(profilesMap);
-          }
-        });
-        unsubs.push(unsubProfiles);
-
-        // 4. Records subscription
-        const unsubRecords = subscribeToHealthRecords((recordsList) => {
-          if (recordsList.length > 0) {
-            setRecords(prev => {
-              const serverIds = new Set(recordsList.map(r => r.id));
-              const localOnly = prev.filter(r => r.id.toString().startsWith('local_') && !serverIds.has(r.id));
-              return [...localOnly, ...recordsList];
+          setRegisteredUsers(deduped);
+          const patients = deduped.filter(u => u.role === 'patient');
+          if (patients.length > 0) {
+            setMongoPatients(patients);
+            setActivePatientName(prev => {
+              const exists = patients.some(p => p.name === prev);
+              if (!exists || prev === 'Jonathan Vance') {
+                return patients[0].name;
+              }
+              return prev;
             });
           }
-        });
-        unsubs.push(unsubRecords);
+          
+          const foundRegUser = deduped.find((u: any) => u.email.toLowerCase() === emailLower);
+          
+          const applyDemoOverrides = (base: any) => {
+            if (emailLower === 'doctor@sutterhealth.org')
+              return { ...base, role: 'doctor' as const, name: 'Dr. Sarah Connor, MD', institution: 'Sutter Health', providerId: 'prov_sutter', logoText: 'SH', providerType: 'Hospital' as const };
+            if (emailLower === 'lab@questdiagnostics.com')
+              return { ...base, role: 'laboratory' as const, name: 'Quest Lab Technician #49', institution: 'Quest Diagnostics', providerId: 'prov_2', logoText: 'QD', providerType: 'Laboratory' as const };
+            if (emailLower === 'patient@mediguard.ai')
+              return { ...base, role: 'patient' as const, name: 'Jonathan Vance' };
+            return base;
+          };
 
-        // 5. Providers subscription + seeding
-        const unsubProviders = subscribeToProviderConsents((providersList) => {
-          if (providersList.length === 0) {
-            providers.forEach(p => saveProviderConsent(p));
+          if (foundRegUser) {
+            setUser(applyDemoOverrides({
+              name: foundRegUser.name,
+              email: foundRegUser.email,
+              password: foundRegUser.password,
+              mfaEnabled: true,
+              role: foundRegUser.role,
+              institution: foundRegUser.institution,
+              providerId: foundRegUser.providerId,
+              logoText: foundRegUser.logoText,
+              providerType: foundRegUser.providerType
+            }));
           } else {
-            setProviders(providersList);
+            setUser(applyDemoOverrides({
+              name: deriveNameFromEmail(firebaseUser.email!),
+              email: firebaseUser.email!,
+              mfaEnabled: true,
+              role: 'patient',
+            }));
           }
-        });
-        unsubs.push(unsubProviders);
 
-        // 6. Blockchain Audit Logs subscription + seeding
-        const unsubAuditLogs = subscribeToBlockchainAuditLogs((logsList) => {
-          if (logsList.length === 0) {
-            auditLogs.forEach(l => saveBlockchainAuditLog(l));
-          } else {
-            setAuditLogs(logsList);
+          // Fetch other data from MongoDB
+          const dbProfiles = await mongoGetPatientProfiles<any>();
+          const profilesMap: Record<string, PatientProfile> = {};
+          dbProfiles.forEach((p: any) => {
+            const name = p.patient_name || p.patientName || p.name;
+            if (name) {
+              profilesMap[name] = {
+                name,
+                patientUid: p.patientUid || p.patient_uid || '',
+                aadhaarId: p.aadhaarId || p.aadhaar_id || '',
+                gender: p.gender || 'Male',
+                age: Number(p.age) || 30,
+                allergies: p.allergies || '',
+                conditions: p.conditions || '',
+                prescriptions: p.prescriptions || '',
+                preferredDoctorName: p.preferredDoctorName || p.preferred_doctor_name || '',
+                preferredHospitalName: p.preferredHospitalName || p.preferred_hospital_name || '',
+                bloodGroup: p.bloodGroup || p.blood_group || '',
+                riskIndicators: p.riskIndicators || p.risk_indicators || { overallIndex: 82, cardiovascular: 18, metabolic: 42, immunological: 25 }
+              };
+            }
+          });
+          setPatientProfiles(prev => ({ ...prev, ...profilesMap }));
+
+          const dbRecords = await mongoGetHealthRecords<HealthRecord>();
+          if (dbRecords.length > 0) {
+            setRecords(dbRecords);
           }
-        });
-        unsubs.push(unsubAuditLogs);
 
-        // 7. Signatures subscription
-        const unsubSigs = subscribeToConsentSignatures((sigsList) => {
-          if (sigsList.length > 0) {
-            setSignatures(sigsList);
+          const dbDocs = await mongoGetMedicalDocuments<MedicalDocument>();
+          if (dbDocs.length > 0) {
+            setMedicalDocuments(dbDocs);
           }
-        });
-        unsubs.push(unsubSigs);
 
-        // 8. Consent audit logs subscription
-        const unsubConsentAudit = subscribeToConsentAuditLogs((logsList) => {
-          if (logsList.length > 0) {
-            setConsentAuditLogs(logsList);
+          const dbProviders = await mongoGetProviderConsents<ProviderConsent>();
+          if (dbProviders.length > 0) {
+            setProviders(dbProviders);
           }
-        });
-        unsubs.push(unsubConsentAudit);
 
-        // 9. Emergency contacts subscription + seeding
-        const unsubContacts = subscribeToEmergencyContacts((contactsList) => {
-          if (contactsList.length === 0) {
-            emergencyContacts.forEach(c => saveEmergencyContact(c));
-          } else {
-            setEmergencyContacts(contactsList);
+          const dbAuditLogs = await mongoGetBlockchainAuditLogs<AuditLog>();
+          if (dbAuditLogs.length > 0) {
+            setAuditLogs(dbAuditLogs);
           }
-        });
-        unsubs.push(unsubContacts);
 
-        // 10. Access requests subscription
-        const unsubRequests = subscribeToAccessRequests((requestsList) => {
-          setPendingRequests(requestsList);
-        });
-        unsubs.push(unsubRequests);
+          const dbSigs = await mongoGetConsentSignatures<ConsentSignature>();
+          if (dbSigs.length > 0) {
+            setSignatures(dbSigs);
+          }
+
+          const dbConsentAudits = await mongoGetConsentAuditLogs<ConsentAuditLog>();
+          if (dbConsentAudits.length > 0) {
+            setConsentAuditLogs(dbConsentAudits);
+          }
+
+          const dbContacts = await mongoGetEmergencyContacts<EmergencyContact>();
+          if (dbContacts.length > 0) {
+            setEmergencyContacts(dbContacts);
+          }
+
+          const dbRequests = await mongoGetAccessRequests<AccessRequest>();
+          if (dbRequests.length > 0) {
+            setPendingRequests(dbRequests);
+          }
+
+        } catch (e) {
+          console.warn('Error loading auth/data from MongoDB:', e);
+        }
+      } else {
+        setUser(null);
       }
     });
 
     return () => {
       unsubAuth();
-      unsubscribeAll();
     };
   }, []);
 
@@ -1184,7 +1362,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = async (email: string, password?: string): Promise<{ success: boolean; error?: string }> => {
     const emailLower = email.toLowerCase();
-    const foundUser = registeredUsers.find(u => u.email.toLowerCase() === emailLower);
+    let foundUser: RegisteredUser | undefined = registeredUsers.find(u => u.email.toLowerCase() === emailLower);
     
     // Check local credentials first
     const expectedPassword = foundUser?.password || (
@@ -1192,6 +1370,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       emailLower === 'doctor@sutterhealth.org' ? 'doctor_passphrase_demo' : 
       emailLower === 'lab@questdiagnostics.com' ? 'lab_passphrase_demo' : undefined
     );
+
+    const isDemoAccount = emailLower === 'patient@mediguard.ai' ||
+                          emailLower === 'doctor@sutterhealth.org' ||
+                          emailLower === 'lab@questdiagnostics.com';
+
+    if (!foundUser && !isDemoAccount) {
+      return { success: false, error: 'User is not registered. Please sign up first.' };
+    }
 
     if (expectedPassword && password && expectedPassword !== password) {
       return { success: false, error: 'Incorrect password. Access denied.' };
@@ -1347,10 +1533,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const registerUser = async (newUser: RegisteredUser) => {
-    setRegisteredUsers(prev => [...prev, newUser]);
-    saveUser(newUser).catch(e => console.warn('Offline: user registration not synced:', e));
+    // Prevent duplicate registrations — check by email (case-insensitive)
+    const emailExists = registeredUsers.some(
+      u => u.email.toLowerCase() === newUser.email.toLowerCase()
+    );
+    if (emailExists) {
+      console.warn('User already registered with this email:', newUser.email);
+      return;
+    }
+    // For patients: also prevent duplicate by name (same name = same person)
+    if (newUser.role === 'patient') {
+      const nameExists = registeredUsers.some(
+        u => u.role === 'patient' && u.name.trim().toLowerCase() === newUser.name.trim().toLowerCase()
+      );
+      if (nameExists) {
+        console.warn('Patient already registered with this name:', newUser.name);
+        return;
+      }
+    }
+    const updatedUsers = [...registeredUsers, newUser];
+    setRegisteredUsers(updatedUsers);
+    saveLocalData('mediguard_registered_users', updatedUsers);
+    await saveUser(newUser).catch(e => console.warn('Offline: user registration not synced:', e));
+    // Refresh the live MongoDB patient list for the doctor panel
+    fetchMongoPatients();
     if (newUser.role === 'patient') {
       const newProfile = synthesizePatientProfile(newUser.name, newUser.aadhaarId);
+      if (newUser.bloodGroup) {
+        newProfile.bloodGroup = newUser.bloodGroup;
+      }
       setPatientProfiles(prev => ({ ...prev, [newUser.name]: newProfile }));
       savePatientProfile(newUser.name, newProfile).catch(e => console.warn('Offline: patient profile not synced:', e));
     }
@@ -1387,7 +1598,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: `${user.name}`,
       institution: user.institution || 'Unknown Provider',
       action: 'CONSENT_GRANT',
-      details: `Initiated ${permission.toUpperCase()} permission request for Patient Health Vault`,
+      details: `Initiated ${permission.toUpperCase()} permission request for Patient Health Vault of ${currentPatientName}`,
       consentToken: 'PENDING',
       hash: newBlockHash,
       parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -1413,13 +1624,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const latestLog = auditLogs[0];
     const newBlockHash = generateMockHash();
     const actionText = !p.permissions[permission] ? 'CONSENT_GRANT' : 'CONSENT_REVOKE';
-    const detailText = `${actionText === 'CONSENT_GRANT' ? 'Granted' : 'Revoked'} ${permission.toUpperCase()} permission for ${p.name}`;
+    const detailText = `${actionText === 'CONSENT_GRANT' ? 'Granted' : 'Revoked'} ${permission.toUpperCase()} permission for ${p.name} (Patient: ${currentPatientName})`;
 
     const newLog: AuditLog = {
       id: `log_${Date.now()}`,
       blockIndex: (latestLog?.blockIndex || 0) + 1,
       timestamp: new Date().toLocaleString(),
-      actor: `${user?.name || 'Jonathan Vance'} (Patient)`,
+      actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
       institution: p.name,
       action: actionText,
       details: detailText,
@@ -1453,7 +1664,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `log_${Date.now()}`,
       blockIndex: (latestLog?.blockIndex || 0) + 1,
       timestamp: new Date().toLocaleString(),
-      actor: `${user?.name || 'Jonathan Vance'} (Patient)`,
+      actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
       institution: p.name,
       action: 'CONSENT_GRANT',
       details: detailText,
@@ -1476,13 +1687,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const latestLog = auditLogs[0];
     const newBlockHash = generateMockHash();
-    const detailText = `Set access expiration for ${p.name} to: ${expiry}`;
+    const detailText = `Set access expiration for ${p.name} to: ${expiry} (Patient: ${currentPatientName})`;
 
     const newLog: AuditLog = {
       id: `log_${Date.now()}`,
       blockIndex: (latestLog?.blockIndex || 0) + 1,
       timestamp: new Date().toLocaleString(),
-      actor: `${user?.name || 'Jonathan Vance'} (Patient)`,
+      actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
       institution: p.name,
       action: 'CONSENT_GRANT',
       details: detailText,
@@ -1495,6 +1706,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAuditLogs(prev => [newLog, ...prev]);
     saveBlockchainAuditLog(newLog).catch(e => console.warn('Offline: audit log not synced:', e));
   };
+
+  const terminateProviderAccess = async (providerId: string) => {
+    try {
+      const p = providers.find(prov => prov.id === providerId);
+      if (!p) return;
+
+      // 1. Delete provider consent from MongoDB
+      await mongoDeleteProviderConsent(providerId).catch(e => console.warn('Offline: provider delete not synced:', e));
+      
+      // 2. Remove provider from local state
+      setProviders(prev => prev.filter(prov => prov.id !== providerId));
+      
+      // 3. Log the revocation in audit trail
+      const latestLog = auditLogs[0];
+      const newBlockHash = generateMockHash();
+      const detailText = `Terminated all access rights and revoked consent for ${p.name} (Patient: ${currentPatientName})`;
+
+      const newLog: AuditLog = {
+        id: `log_${Date.now()}`,
+        blockIndex: (latestLog?.blockIndex || 0) + 1,
+        timestamp: new Date().toLocaleString(),
+        actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
+        institution: p.name,
+        action: 'CONSENT_REVOKE',
+        details: detailText,
+        consentToken: 'REVOKED',
+        hash: newBlockHash,
+        parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
+        status: 'SUCCESS'
+      };
+      
+      setAuditLogs(prev => [newLog, ...prev]);
+      saveBlockchainAuditLog(newLog).catch(e => console.warn('Offline: audit log not synced:', e));
+    } catch (err: any) {
+      console.error('Error revoking consent:', err);
+    }
+  };
+
 
   const addRecord = async (
     name: string, 
@@ -1617,7 +1866,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 actor: user?.role === 'patient' ? 'Patient Portal App' : `${user?.name}`,
                 institution: user?.role === 'patient' ? 'Self Upload Node' : (user?.institution || 'Clinical Provider'),
                 action: 'WRITE',
-                details: `Encrypted & stored "${name}" on ledger at Block #${blockNum}`,
+                details: `Encrypted & stored "${name}" on ledger for Patient: ${currentPatientName} at Block #${blockNum}`,
                 consentToken: user?.role === 'patient' ? 'tok_self_authorized' : `tok_${Math.random().toString(36).substring(2, 10)}`,
                 hash: logHash,
                 parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -1629,7 +1878,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 console.error('Background blockchain audit log save failed:', e)
               );
 
-              setUploadingFile({ name: '', step: null });
+              setUploadingFile(null);
               setRewardTokens(prev => prev + 25);
               resolve(recordId);
             }, 1000);
@@ -1675,6 +1924,261 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRecords(previous => previous.filter(item => item.id !== recordId));
   };
 
+  const seedDefaultMedicalDocuments = async () => {
+    const defaults: MedicalDocument[] = [
+      {
+        id: 'doc_seed_1',
+        patient_id: 'Jonathan Vance',
+        category: 'Prescription',
+        document_name: 'Vivek S Prescription',
+        original_filename: 'Vivek_Prescription.jpeg',
+        mime_type: 'image/jpeg',
+        file_size: 145000,
+        hospital_name: 'Adichunchanagiri Institute of Medical Sciences',
+        doctor_name: 'Dr. Vivek S',
+        upload_date: '22 Dec 2022',
+        storage_url: 'https://firebasestorage.googleapis.com/v0/b/pulseindexai-c0c19.appspot.com/o/demo%2Fvivek.jpg?alt=media',
+        processing_mode: 'STRUCTURED',
+        status: 'Securely Stored'
+      },
+      {
+        id: 'doc_seed_2',
+        patient_id: 'Jonathan Vance',
+        category: 'Lab Report',
+        document_name: 'Zahidul Hasan Trauma Report',
+        original_filename: 'Trauma_Report.pdf',
+        mime_type: 'application/pdf',
+        file_size: 480000,
+        hospital_name: 'Trauma Center, Dhaka',
+        doctor_name: 'Dr. Sk. M. Joynal Abedin',
+        upload_date: '18 Nov 2010',
+        storage_url: 'https://firebasestorage.googleapis.com/v0/b/pulseindexai-c0c19.appspot.com/o/demo%2Ftrauma.pdf?alt=media',
+        processing_mode: 'STRUCTURED',
+        status: 'Securely Stored'
+      },
+      {
+        id: 'doc_seed_3',
+        patient_id: 'Jonathan Vance',
+        category: 'MRI Scan',
+        document_name: 'Brain MRI Scan',
+        original_filename: 'Brain_MRI.jpeg',
+        mime_type: 'image/jpeg',
+        file_size: 18800000,
+        hospital_name: 'Apollo Hospital',
+        doctor_name: 'Dr. Marcus Vance',
+        upload_date: '08 Jul 2026',
+        storage_url: 'https://firebasestorage.googleapis.com/v0/b/pulseindexai-c0c19.appspot.com/o/demo%2Fmri.jpg?alt=media',
+        processing_mode: 'ORIGINAL',
+        status: 'Securely Stored'
+      },
+      {
+        id: 'doc_seed_4',
+        patient_id: 'Jonathan Vance',
+        category: 'Insurance Documents',
+        document_name: 'Aegis Health Insurance Policy',
+        original_filename: 'Health_Insurance.pdf',
+        mime_type: 'application/pdf',
+        file_size: 1540000,
+        hospital_name: 'Aegis Assurance Corp',
+        doctor_name: 'Underwriter Team',
+        upload_date: '01 Jan 2026',
+        storage_url: 'https://firebasestorage.googleapis.com/v0/b/pulseindexai-c0c19.appspot.com/o/demo%2Finsurance.pdf?alt=media',
+        processing_mode: 'ORIGINAL',
+        status: 'Securely Stored'
+      }
+    ];
+
+    for (const docObj of defaults) {
+      await saveMedicalDocument(docObj).catch(e => console.warn('Seeding doc failed:', e));
+    }
+  };
+
+  const addMedicalDocument = async (
+    docData: {
+      category: MedicalDocument['category'];
+      document_name: string;
+      original_filename: string;
+      mime_type: string;
+      file_size: number;
+      hospital_name: string;
+      doctor_name: string;
+      upload_date: string;
+      processing_mode: 'STRUCTURED' | 'ORIGINAL';
+    },
+    file?: File,
+    clinicalFindings?: string
+  ): Promise<string> => {
+    return new Promise(async (resolve) => {
+      const docId = `doc_${Date.now()}`;
+      setUploadingFile({ name: docData.document_name, step: 'hashing' });
+
+      const hash = generateMockHash();
+
+      setTimeout(() => {
+        setUploadingFile({ name: docData.document_name, step: 'virus scan' });
+
+        setTimeout(async () => {
+          setUploadingFile({ name: docData.document_name, step: 'storing' });
+
+          let storageUrl = '';
+          if (file) {
+            try {
+              if (file.size > 100 * 1024 * 1024) {
+                console.error('File size exceeds 100MB limit.');
+                resolve('');
+                return;
+              }
+
+              const path = `medical_docs/${user?.email || 'guest'}/${docId}_${file.name}`;
+              
+              // Run storageManager.upload with a timeout of 4 seconds to prevent hanging
+              const uploadRes = await withTimeout(
+                storageManager.upload(file, path),
+                4000,
+                { success: false, error: 'Upload timed out. Falling back to local blob preview.' }
+              ).catch(err => ({ success: false, error: err.message }));
+
+              if (uploadRes && uploadRes.success && uploadRes.downloadUrl) {
+                storageUrl = uploadRes.downloadUrl;
+              } else {
+                console.warn('Storage upload failed or timed out:', uploadRes?.error);
+                try {
+                  storageUrl = URL.createObjectURL(file);
+                } catch (blobErr) {
+                  storageUrl = `https://firebasestorage.googleapis.com/v0/b/pulseindexai-c0c19.appspot.com/o/demo%2Fplaceholder.pdf?alt=media`;
+                }
+              }
+            } catch (err) {
+              console.error('Storage upload error in addMedicalDocument:', err);
+            }
+          } else {
+            storageUrl = `https://firebasestorage.googleapis.com/v0/b/pulseindexai-c0c19.appspot.com/o/demo%2Fplaceholder.pdf?alt=media`;
+          }
+
+          setUploadingFile({ name: docData.document_name, step: 'saving metadata' });
+
+          const newDoc: MedicalDocument = {
+            id: docId,
+            patient_id: user?.role === 'patient' ? user.name : activePatientName,
+            category: docData.category,
+            document_name: docData.document_name,
+            original_filename: docData.original_filename,
+            mime_type: docData.mime_type,
+            file_size: docData.file_size,
+            hospital_name: docData.hospital_name || 'Not Specified',
+            doctor_name: docData.doctor_name || 'Not Specified',
+            upload_date: docData.upload_date,
+            storage_url: storageUrl,
+            thumbnail_url: docData.mime_type.startsWith('image/') ? storageUrl : undefined,
+            processing_mode: docData.processing_mode,
+            status: 'Securely Stored'
+          };
+
+          if (file) {
+            await storeFile(docId, file).catch(e =>
+              console.warn('Failed to store file in IndexedDB:', e)
+            );
+          }
+
+          setMedicalDocuments(prev => [newDoc, ...prev]);
+
+          await saveMedicalDocument(newDoc).catch(e =>
+            console.warn('Offline: failed to sync medical document to Firestore:', e)
+          );
+
+          if (docData.processing_mode === 'STRUCTURED') {
+            const sizeStr = docData.file_size > 1024 * 1024
+              ? `${(docData.file_size / (1024 * 1024)).toFixed(1)} MB`
+              : `${(docData.file_size / 1024).toFixed(0)} KB`;
+
+            const blockNum = Math.floor(Math.random() * 500) + 1050;
+            const uploaderInstitution = user?.role === 'patient' ? 'Self Uploaded (Secure Node)' : (user?.institution || 'Clinical Portal');
+            
+            let oldCategory: HealthRecord['category'] = 'Medical Records';
+            if (docData.category === 'Prescription') oldCategory = 'Prescriptions';
+            else if (docData.category === 'Lab Report' || docData.category === 'Blood Test') oldCategory = 'Laboratory Reports';
+            else if (docData.category === 'Insurance Documents') oldCategory = 'Insurance Documents';
+
+            const compatRecord: HealthRecord = {
+              id: `compat_${docId}`,
+              name: docData.document_name,
+              category: oldCategory,
+              date: docData.upload_date,
+              institution: docData.hospital_name || uploaderInstitution,
+              owner: user?.role === 'patient' ? user.name : activePatientName,
+              hash: hash,
+              encryptionStatus: 'AES-256-GCM Encrypted',
+              securityStatus: 'Active Encryption',
+              classification: 'General',
+              lastAccessed: 'Just now',
+              accessHistory: [],
+              size: sizeStr,
+              confidenceScore: parseFloat((Math.random() * 2 + 97.5).toFixed(1)),
+              sensitivePIIDetected: Math.random() > 0.6,
+              blockNumber: blockNum,
+              clinicalFindings: clinicalFindings,
+              fileUrl: storageUrl
+            };
+
+            setRecords(prev => [compatRecord, ...prev]);
+            await saveHealthRecord(compatRecord).catch(e =>
+              console.warn('Offline: failed to sync compatibility record:', e)
+            );
+
+            if (clinicalFindings && clinicalFindings.startsWith('__STRUCTURED__')) {
+              try {
+                const structured = JSON.parse(clinicalFindings.replace('__STRUCTURED__', ''));
+                if (structured.medications && structured.medications.length > 0) {
+                  const newMeds = structured.medications
+                    .map((m: { name: string }) => m.name)
+                    .filter((n: string) => n.length > 1)
+                    .join(', ');
+
+                  const patientName = user?.role === 'patient' ? user.name : activePatientName;
+                  const existing = patientProfiles[patientName];
+                  if (existing) {
+                    const newProfile = {
+                      ...existing,
+                      prescriptions: newMeds
+                    };
+                    setPatientProfiles(prev => ({ ...prev, [patientName]: newProfile }));
+                    savePatientProfile(newProfile.name, newProfile).catch(e => console.warn('Offline: patient profile not saved:', e));
+                  }
+                }
+              } catch (e) {
+                console.warn('Failed parsing structured meds in compatibility block:', e);
+              }
+            }
+          }
+
+          setUploadingFile(null);
+          resolve(docId);
+        }, 1000);
+      }, 1000);
+    });
+  };
+
+  const deleteMedicalDocument = async (docId: string) => {
+    setMedicalDocuments(prev => prev.filter(d => d.id !== docId));
+    await deleteFileFromDB(docId).catch(e =>
+      console.warn('Failed to delete file from IndexedDB:', e)
+    );
+    mongoDeleteMedicalDocument(docId).catch(e =>
+      console.warn('Offline: failed to delete medical document from MongoDB:', e)
+    );
+
+    setRecords(prev => {
+      const exists = prev.some(r => r.id === `compat_${docId}`);
+      if (exists) {
+        mongoDeleteHealthRecord(`compat_${docId}`).catch(e =>
+          console.warn('Offline: failed to delete compat health record from MongoDB:', e)
+        );
+        return prev.filter(r => r.id !== `compat_${docId}`);
+      }
+      return prev;
+    });
+  };
+
   const triggerBreakGlass = async (doctorName: string, reason: string) => {
     setBreakGlassActive(true);
     setActiveEmergencyDoctor(doctorName);
@@ -1682,7 +2186,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     const latestLog = auditLogs[0];
     const newBlockHash = generateMockHash();
-    const detailText = `EMERGENCY OVERRIDE activated by ${doctorName}. Reason: ${reason}`;
+    const detailText = `EMERGENCY OVERRIDE activated by ${doctorName} for Patient: ${currentPatientName}. Reason: ${reason}`;
 
     const newLog: AuditLog = {
       id: `log_${Date.now()}`,
@@ -1714,10 +2218,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `log_${Date.now()}`,
       blockIndex: (latestLog?.blockIndex || 0) + 1,
       timestamp: new Date().toLocaleString(),
-      actor: `${user?.name || 'Jonathan Vance'} (Patient)`,
+      actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
       institution: 'MediGuard System',
       action: 'EMERGENCY_DEACTIVATE',
-      details: 'Emergency override deactivated. Consent requirements restored.',
+      details: `Emergency override deactivated for Patient: ${currentPatientName}. Consent requirements restored.`,
       consentToken: 'N/A',
       hash: newBlockHash,
       parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -1766,10 +2270,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `log_${Date.now()}`,
       blockIndex: (latestLog?.blockIndex || 0) + 1,
       timestamp: new Date().toLocaleString(),
-      actor: `${user?.name || 'Jonathan Vance'} (Patient)`,
+      actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
       institution: request.providerName,
       action: 'CONSENT_GRANT',
-      details: `Approved incoming request. Granted ${request.requestedPermission.toUpperCase()} permission to ${request.providerName}`,
+      details: `Approved incoming request. Granted ${request.requestedPermission.toUpperCase()} permission to ${request.providerName} (Patient: ${currentPatientName})`,
       consentToken: `tok_${Math.random().toString(36).substring(2, 10)}`,
       hash: newBlockHash,
       parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -1793,10 +2297,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `log_${Date.now()}`,
       blockIndex: (latestLog?.blockIndex || 0) + 1,
       timestamp: new Date().toLocaleString(),
-      actor: `${user?.name || 'Jonathan Vance'} (Patient)`,
+      actor: user?.name ? `${user.name} (${user.role === 'doctor' ? 'Doctor' : 'Patient'})` : 'Jonathan Vance (Patient)',
       institution: request.providerName,
       action: 'CONSENT_REVOKE',
-      details: `Declined incoming access request from ${request.providerName}`,
+      details: `Declined incoming access request from ${request.providerName} (Patient: ${currentPatientName})`,
       consentToken: 'N/A',
       hash: newBlockHash,
       parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -1829,7 +2333,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           actor: 'System Auditor Engine',
           institution: 'Local Sovereign Node',
           action: 'LEDGER_VERIFIED',
-          details: `Validated hash link chaining of ${auditLogs.length} blocks. Cryptographic check passed.`,
+          details: `Validated hash link chaining of ${auditLogs.length} blocks for Patient: ${currentPatientName}. Cryptographic check passed.`,
           consentToken: 'N/A',
           hash: newBlockHash,
           parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -1882,7 +2386,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'AI Prescription Guardian',
       institution: 'Sovereign Safety Node',
       action: actionText,
-      details: `AI Scan for ${drugName} - Risk: ${riskLevel}. Status: ${status}. Details: ${details}`,
+      details: `AI Scan for ${drugName} for Patient: ${currentPatientName} - Risk: ${riskLevel}. Status: ${status}. Details: ${details}`,
       consentToken: `sec_guard_${Math.random().toString(36).substring(2, 8)}`,
       hash: newBlockHash,
       parentHash: latestLog?.hash || '0x0000000000000000000000000000000000000000000000000000000000000000',
@@ -2079,6 +2583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       togglePermission,
       toggleDataCategory,
       updateConsentExpiry,
+      terminateProviderAccess,
       auditLogs,
       pendingRequests,
       approveAccessRequest,
@@ -2094,6 +2599,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       emergencyContacts: filteredEmergencyContacts,
       addEmergencyContact,
       deleteEmergencyContact,
+      medicalDocuments,
+      addMedicalDocument,
+      deleteMedicalDocument,
       optInResearch,
       setOptInResearch,
       rewardTokens,
@@ -2102,6 +2610,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       registeredUsers,
       registerUser,
       resetApplication,
+      mongoPatients,
       activePatientName,
       setActivePatientName,
       patientProfiles,

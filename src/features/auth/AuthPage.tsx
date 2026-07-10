@@ -22,6 +22,7 @@ export const AuthPage: React.FC = () => {
   const [regLogoText, setRegLogoText] = useState('');
   const [regRole, setRegRole] = useState<'patient' | 'doctor' | 'laboratory'>('doctor');
   const [regType, setRegType] = useState<'Hospital' | 'Laboratory' | 'Pharmacy' | 'Insurance'>('Hospital');
+  const [regBloodGroup, setRegBloodGroup] = useState('O+');
   const [successMessage, setSuccessMessage] = useState('');
 
   const handleSendCode = async (e: React.FormEvent) => {
@@ -90,6 +91,7 @@ export const AuthPage: React.FC = () => {
         password: regPassword,
         role: regRole,
         aadhaarId: regRole === 'patient' ? formattedAadhaar : undefined,
+        bloodGroup: regRole === 'patient' ? regBloodGroup : undefined,
         ...(regRole !== 'patient' ? {
           institution: regInstitution,
           providerId: `prov_custom_${Date.now()}`,
@@ -344,27 +346,43 @@ export const AuthPage: React.FC = () => {
                     )}
 
                     {regRole === 'patient' && (
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Aadhaar Card Number</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. 5524-1182-9014"
-                          maxLength={14}
-                          value={regAadhaarId}
-                          onChange={(e) => {
-                            let val = e.target.value.replace(/[^0-9]/g, '');
-                            if (val.length > 4 && val.length <= 8) {
-                              val = `${val.substring(0, 4)}-${val.substring(4)}`;
-                            } else if (val.length > 8) {
-                              val = `${val.substring(0, 4)}-${val.substring(4, 8)}-${val.substring(8, 12)}`;
-                            }
-                            setRegAadhaarId(val);
-                          }}
-                          className="w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 placeholder-slate-400 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 transition-all font-mono"
-                          required
-                          disabled={isLoading}
-                        />
-                      </div>
+                      <>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Aadhaar Card Number</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. 5524-1182-9014"
+                            maxLength={14}
+                            value={regAadhaarId}
+                            onChange={(e) => {
+                              let val = e.target.value.replace(/[^0-9]/g, '');
+                              if (val.length > 4 && val.length <= 8) {
+                                val = `${val.substring(0, 4)}-${val.substring(4)}`;
+                              } else if (val.length > 8) {
+                                val = `${val.substring(0, 4)}-${val.substring(4, 8)}-${val.substring(8, 12)}`;
+                              }
+                              setRegAadhaarId(val);
+                            }}
+                            className="w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 placeholder-slate-400 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 transition-all font-mono"
+                            required
+                            disabled={isLoading}
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Blood Group</label>
+                          <select
+                            value={regBloodGroup}
+                            onChange={(e) => setRegBloodGroup(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 bg-white rounded-xl text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 cursor-pointer"
+                            disabled={isLoading}
+                          >
+                            {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(bg => (
+                              <option key={bg} value={bg}>{bg}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
                     )}
 
                     <div className="space-y-1.5">
